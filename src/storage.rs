@@ -223,6 +223,13 @@ impl Project {
         self.persist_entry(updated, Some(previous_path.as_path()))
     }
 
+    pub fn reconcile_edited_entry(&self, original_path: &Path) -> Result<Entry> {
+        let mut edited = self.load_entry_from_path(original_path)?;
+        let previous_path = edited.path.clone();
+        edited.front_matter.updated_at = Utc::now();
+        self.persist_entry(edited, Some(previous_path.as_path()))
+    }
+
     pub fn delete_entry(&self, id: &str) -> Result<Entry> {
         let entry = self.load_entry(id)?;
         fs::remove_file(&entry.path)
@@ -384,6 +391,7 @@ pub fn slugify(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::time::Duration;
 
     use tempfile::TempDir;
 
@@ -451,6 +459,31 @@ mod tests {
         assert!(!entry_path.exists());
         assert!(!section_root.exists());
         assert!(project.load_entry(entry.id()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_edited_entry_updates_timestamp_and_body() -> Result<()> {
+        let temp = TempDir::new()?;
+        let project = Project::init(temp.path(), Some("demo".to_string()), false)?;
+        let entry = project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Edit me outside".to_string(),
+            section: None,
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::new(),
+            body: Some("Original body".to_string()),
+        })?;
+
+        let original_updated_at = entry.front_matter.updated_at;
+        std::thread::sleep(Duration::from_millis(5));
+        let raw = fs::read_to_string(&entry.path)?;
+        fs::write(&entry.path, raw.replace("Original body", "Edited body"))?;
+
+        let reconciled = project.reconcile_edited_entry(&entry.path)?;
+
+        assert_eq!(reconciled.body, "Edited body");
+        assert!(reconciled.front_matter.updated_at > original_updated_at);
         Ok(())
     }
 }

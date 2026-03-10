@@ -135,12 +135,13 @@ Poor updates usually:
 
 ## TUI Usage
 
-`cotext tui` is the fastest way to review or edit context on one screen.
+`cotext tui` is the fastest way to review or edit context on one screen. Use `Enter` to open the selected entry in `$VISUAL` or `$EDITOR` when you want full markdown editing instead of the inline terminal widget.
 
 Useful TUI capabilities:
 
 - browse by category
-- edit body, title, section, and tags
+- open the selected entry in your real editor for body/front-matter edits
+- edit title, section, and tags directly in the TUI
 - stage new entries before the first write
 - preview packets for the current entry, current category, open category work, and open project work
 - switch preview audience and copy packets to the clipboard

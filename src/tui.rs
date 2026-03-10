@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use arboard::Clipboard;
 use chrono::Utc;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -57,7 +59,6 @@ pub fn run(project: Project) -> Result<()> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
     Browse,
-    EditBody,
     EditTitle,
     EditSection,
     EditTags,
@@ -77,7 +78,6 @@ impl Mode {
     fn label(self) -> &'static str {
         match self {
             Self::Browse => "browse",
-            Self::EditBody => "body",
             Self::EditTitle => "title",
             Self::EditSection => "section",
             Self::EditTags => "tags",
@@ -136,13 +136,17 @@ enum Overlay {
     ConfirmDelete { id: String, title: String },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum AppAction {
+    OpenEntryInEditor { id: String, path: PathBuf },
+}
+
 struct App {
     project: Project,
     entries: Vec<Entry>,
     category_index: usize,
     selected: usize,
     mode: Mode,
-    body_editor: TextArea<'static>,
     field_editor: TextArea<'static>,
     status: String,
     preview_mode: PreviewMode,
@@ -150,6 +154,7 @@ struct App {
     preview_scroll: u16,
     create_draft: Option<CreateDraft>,
     overlay: Option<Overlay>,
+    pending_action: Option<AppAction>,
 }
 
 impl App {
@@ -160,7 +165,6 @@ impl App {
             category_index: 0,
             selected: 0,
             mode: Mode::Browse,
-            body_editor: TextArea::default(),
             field_editor: TextArea::default(),
             status: default_status_message().to_string(),
             preview_mode: PreviewMode::Entry,
@@ -168,6 +172,7 @@ impl App {
             preview_scroll: 0,
             create_draft: None,
             overlay: None,
+            pending_action: None,
         };
         app.refresh(None)?;
         Ok(app)
@@ -309,22 +314,6 @@ impl App {
         self.preview_scroll = 0;
     }
 
-    fn start_body_edit(&mut self) {
-        if let Some((title, body)) = self
-            .selected_entry()
-            .map(|entry| (entry.title().to_string(), entry.body.clone()))
-        {
-            self.body_editor = TextArea::from(body.lines());
-            configure_text_area(
-                &mut self.body_editor,
-                "Body Editor (Ctrl-S to save, Esc to cancel)",
-                ACCENT,
-            );
-            self.mode = Mode::EditBody;
-            self.status = format!("Editing body for `{title}`");
-        }
-    }
-
     fn start_title_edit(&mut self) {
         if let Some(title) = self.selected_entry().map(|entry| entry.title().to_string()) {
             self.set_field_editor(
@@ -399,6 +388,28 @@ impl App {
             title: title.clone(),
         });
         self.status = format!("Delete `{title}`? Press Enter to confirm.");
+    }
+
+    fn queue_open_entry_in_editor(&mut self, entry: Entry) {
+        let id = entry.id().to_string();
+        self.pending_action = Some(AppAction::OpenEntryInEditor {
+            id: id.clone(),
+            path: entry.path,
+        });
+        self.mode = Mode::Browse;
+        self.status = format!("Opening `{id}` in external editor...");
+    }
+
+    fn request_open_selected_in_editor(&mut self) {
+        let Some(entry) = self.selected_entry().cloned() else {
+            self.status = "No entry selected to open in the editor".to_string();
+            return;
+        };
+        self.queue_open_entry_in_editor(entry);
+    }
+
+    fn take_pending_action(&mut self) -> Option<AppAction> {
+        self.pending_action.take()
     }
 
     fn confirm_delete(&mut self) -> Result<()> {
@@ -512,28 +523,6 @@ impl App {
     fn save_editor(&mut self) -> Result<()> {
         match self.mode {
             Mode::Browse => {}
-            Mode::EditBody => {
-                let Some(entry) = self.selected_entry().cloned() else {
-                    return Ok(());
-                };
-                let body = self.body_editor.lines().join("\n");
-                if body == entry.body {
-                    self.mode = Mode::Browse;
-                    self.status = "Body unchanged".to_string();
-                    return Ok(());
-                }
-                let id = entry.id().to_string();
-                self.project.update_entry(
-                    &id,
-                    EntryUpdate {
-                        body: Some(body),
-                        ..EntryUpdate::default()
-                    },
-                )?;
-                self.mode = Mode::Browse;
-                self.refresh(Some(id.clone()))?;
-                self.status = format!("Saved body for `{id}`");
-            }
             Mode::EditTitle => {
                 let Some(entry) = self.selected_entry().cloned() else {
                     return Ok(());
@@ -675,7 +664,7 @@ impl App {
                 let preserve_id = Some(created.id().to_string());
                 self.mode = Mode::Browse;
                 self.refresh(preserve_id)?;
-                self.start_body_edit();
+                self.queue_open_entry_in_editor(created);
             }
         }
         Ok(())
@@ -836,7 +825,7 @@ impl App {
                 KeyCode::BackTab => self.previous_category(),
                 KeyCode::Char('j') | KeyCode::Down => self.move_down(),
                 KeyCode::Char('k') | KeyCode::Up => self.move_up(),
-                KeyCode::Char('e') => self.start_body_edit(),
+                KeyCode::Enter | KeyCode::Char('e') => self.request_open_selected_in_editor(),
                 KeyCode::Char('t') => self.start_title_edit(),
                 KeyCode::Char('s') => self.start_section_edit(),
                 KeyCode::Char('g') => self.start_tags_edit(),
@@ -852,13 +841,6 @@ impl App {
                 KeyCode::Char('r') => self.refresh(self.selected_entry_id())?,
                 _ => {}
             },
-            Mode::EditBody => {
-                if key.code == KeyCode::Esc {
-                    self.cancel_edit();
-                } else {
-                    self.body_editor.input(key);
-                }
-            }
             Mode::EditTitle
             | Mode::EditSection
             | Mode::EditTags
@@ -889,6 +871,9 @@ fn run_loop(
             && app.handle_key(key)?
         {
             break;
+        }
+        if let Some(action) = app.take_pending_action() {
+            handle_app_action(terminal, &mut app, action)?;
         }
     }
     Ok(())
@@ -1085,7 +1070,6 @@ fn draw_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 
     match app.mode {
         Mode::Browse => draw_browse_preview(frame, rows[1], app),
-        Mode::EditBody => frame.render_widget(&app.body_editor, rows[1]),
         Mode::EditTitle | Mode::EditSection | Mode::EditTags => {
             let split = Layout::default()
                 .direction(Direction::Vertical)
@@ -1377,20 +1361,23 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
 
     let write_help = Paragraph::new(vec![
         Line::from(vec![
-            keycap("e"),
-            Span::styled(" edit body", Style::default().fg(TEXT_MUTED)),
+            keycap("Enter/e"),
+            Span::styled(
+                " open the selected entry in your editor",
+                Style::default().fg(TEXT_MUTED),
+            ),
         ]),
         Line::from(vec![
             keycap("t/s/g"),
             Span::styled(
-                " edit title, section, and tags",
+                " edit title, section, and tags in the TUI",
                 Style::default().fg(TEXT_MUTED),
             ),
         ]),
         Line::from(vec![
             keycap("Ctrl-S"),
             Span::styled(
-                " save edits or advance the add-entry flow",
+                " save metadata edits or advance the add-entry flow",
                 Style::default().fg(TEXT_MUTED),
             ),
         ]),
@@ -1426,7 +1413,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
 
     let tip = Paragraph::new(vec![
         Line::from(Span::styled(
-            "Add flow: title -> section -> tags -> body. Delete removes the markdown file from .cotext/entries and prunes empty section directories.",
+            "Add flow: title -> section -> tags -> editor. Delete removes the markdown file from .cotext/entries and prunes empty section directories.",
             Style::default().fg(TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
@@ -1560,14 +1547,14 @@ fn footer_hint_spans(app: &App) -> Vec<Span<'static>> {
             Mode::Browse => vec![
                 ("Tab", "category"),
                 ("j/k", "move"),
+                ("Enter", "edit"),
                 ("n/+", "add"),
                 ("d", "delete"),
                 ("?", "help"),
                 ("p/a", "preview"),
-                ("c/C", "copy"),
                 ("q", "quit"),
             ],
-            Mode::EditBody | Mode::EditTitle | Mode::EditSection | Mode::EditTags => {
+            Mode::EditTitle | Mode::EditSection | Mode::EditTags => {
                 vec![("Ctrl-S", "save"), ("Esc", "cancel"), ("F1", "help")]
             }
             Mode::CreateTitle | Mode::CreateSection | Mode::CreateTags => {
@@ -1612,7 +1599,7 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn default_status_message() -> &'static str {
-    "Browse the current category, or press ? for help."
+    "Browse the current category, press Enter to edit, or ? for help."
 }
 
 fn is_open_entry(entry: &Entry) -> bool {
@@ -1643,6 +1630,95 @@ fn parse_tags_input(input: &str) -> BTreeSet<String> {
 fn copy_to_clipboard(contents: &str) -> Result<()> {
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(contents.to_string())?;
+    Ok(())
+}
+
+enum ExternalEditOutcome {
+    Unchanged { id: String },
+    Updated { entry: Entry },
+}
+
+fn handle_app_action(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut App,
+    action: AppAction,
+) -> Result<()> {
+    match action {
+        AppAction::OpenEntryInEditor { id, path } => {
+            match open_entry_in_external_editor(terminal, &app.project, &id, &path) {
+                Ok(ExternalEditOutcome::Unchanged { id }) => {
+                    app.status = format!("Closed editor for `{id}` without changes");
+                }
+                Ok(ExternalEditOutcome::Updated { entry }) => {
+                    let updated_id = entry.id().to_string();
+                    match app.refresh(Some(updated_id.clone())) {
+                        Ok(()) => {
+                            app.status = format!("Updated `{updated_id}` from the external editor");
+                        }
+                        Err(error) => {
+                            app.status =
+                                format!("Edited `{updated_id}`, but refresh failed: {error}");
+                        }
+                    }
+                }
+                Err(error) => {
+                    app.status = format!("Editor error for `{id}`: {error}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn open_entry_in_external_editor(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    project: &Project,
+    id: &str,
+    path: &Path,
+) -> Result<ExternalEditOutcome> {
+    let original_raw =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    suspend_terminal(terminal)?;
+    let editor_result = launch_external_editor(path);
+    let resume_result = resume_terminal(terminal);
+    resume_result?;
+    editor_result?;
+
+    let current_raw =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if current_raw == original_raw {
+        return Ok(ExternalEditOutcome::Unchanged { id: id.to_string() });
+    }
+
+    let entry = project.reconcile_edited_entry(path)?;
+    Ok(ExternalEditOutcome::Updated { entry })
+}
+
+fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.clear()?;
+    Ok(())
+}
+
+fn launch_external_editor(path: &Path) -> Result<()> {
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg("exec ${VISUAL:-${EDITOR:-vi}} \"$1\"")
+        .arg("cotext-editor")
+        .arg(path)
+        .status()
+        .with_context(|| format!("failed to launch editor for {}", path.display()))?;
+    if !status.success() {
+        bail!("external editor exited with status {status}");
+    }
     Ok(())
 }
 
@@ -1733,7 +1809,7 @@ mod tests {
         app.save_editor()?;
 
         let entry = app.selected_entry().cloned().expect("new entry selected");
-        assert_eq!(app.mode, Mode::EditBody);
+        assert_eq!(app.mode, Mode::Browse);
         assert_eq!(entry.id(), "roadmap-item");
         assert_eq!(entry.title(), "Roadmap item");
         assert_eq!(entry.section(), Some("tui/roadmap"));
@@ -1741,6 +1817,10 @@ mod tests {
             entry.front_matter.tags,
             BTreeSet::from(["tui".to_string(), "ux".to_string()])
         );
+        assert!(matches!(
+            app.take_pending_action(),
+            Some(AppAction::OpenEntryInEditor { id, .. }) if id == "roadmap-item"
+        ));
         Ok(())
     }
 
@@ -1845,6 +1925,30 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
         assert!(app.overlay.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn enter_shortcut_queues_external_editor_for_selected_entry() -> Result<()> {
+        let project = seeded_project()?;
+        project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Edit me".to_string(),
+            section: Some("tui".to_string()),
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::new(),
+            body: Some("Body".to_string()),
+        })?;
+
+        let mut app = App::new(project)?;
+        app.category_index = 3;
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))?;
+
+        assert!(matches!(
+            app.take_pending_action(),
+            Some(AppAction::OpenEntryInEditor { id, .. }) if id == "edit-me"
+        ));
         Ok(())
     }
 }

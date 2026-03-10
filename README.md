@@ -90,15 +90,16 @@ For the full agent workflow and maintenance notes, see [docs/agent-workflow.md](
 
 ## TUI
 
-`cotext tui` provides a single-screen terminal board for browsing, editing, previewing, and copying entries and packets.
+`cotext tui` provides a single-screen terminal board for browsing, editing metadata, previewing, and copying entries and packets. Press `Enter` to open the selected entry in `$VISUAL` or `$EDITOR` for real markdown editing.
 
 Key bindings:
 
 - `Tab` / `Shift-Tab`: switch category
 - `j` / `k`: move selection
+- `Enter` / `e`: open the selected entry in your editor
 - `n` / `+`: add entry
 - `d` / `Delete`: delete entry with confirmation
-- `e` / `t` / `s` / `g`: edit body, title, section, and tags
+- `t` / `s` / `g`: edit title, section, and tags
 - `p` / `a`: change preview mode and audience
 - `?` in browse mode, or `F1` anywhere: toggle help
 - `PageUp` / `PageDown`: scroll preview
@@ -106,26 +107,3 @@ Key bindings:
 - `Esc`: cancel
 - `c` / `C`: copy selected or category packet
 - `q`: quit
-
-## Development
-
-Local and CI checks use the same quality gate:
-
-- `cargo fmt --all -- --check`
-- `cargo check --all-targets --all-features`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test`
-
-Install hooks with:
-
-```bash
-pre-commit install
-```
-
-Run them on demand with:
-
-```bash
-pre-commit run --all-files
-```
-
-Crates.io publishing is handled by GitHub Actions. The publish workflow expects a `CARGO_REGISTRY_TOKEN` repository secret and publishes from a matching release tag such as `v0.1.0`.
