@@ -203,7 +203,9 @@ fn cmd_init(args: InitArgs) -> Result<()> {
         let codex = install_codex(&project, args.codex_skill_dir.as_deref(), true)?;
         let claude = install_claude(&project, true)?;
         print_install_report("codex", &codex.changed);
+        print_removed_report(&codex.removed);
         print_install_report("claude", &claude.changed);
+        print_removed_report(&claude.removed);
     }
     Ok(())
 }
@@ -309,11 +311,13 @@ fn cmd_agent(args: AgentArgs) -> Result<()> {
                     let report =
                         install_codex(&project, args.codex_skill_dir.as_deref(), args.overwrite)?;
                     print_install_report("codex", &report.changed);
+                    print_removed_report(&report.removed);
                     print_skip_report(&report.skipped);
                 }
                 AgentTarget::Claude => {
                     let report = install_claude(&project, args.overwrite)?;
                     print_install_report("claude", &report.changed);
+                    print_removed_report(&report.removed);
                     print_skip_report(&report.skipped);
                 }
                 AgentTarget::All => {
@@ -321,7 +325,9 @@ fn cmd_agent(args: AgentArgs) -> Result<()> {
                         install_codex(&project, args.codex_skill_dir.as_deref(), args.overwrite)?;
                     let claude = install_claude(&project, args.overwrite)?;
                     print_install_report("codex", &codex.changed);
+                    print_removed_report(&codex.removed);
                     print_install_report("claude", &claude.changed);
+                    print_removed_report(&claude.removed);
                     print_skip_report(&codex.skipped);
                     print_skip_report(&claude.skipped);
                 }
@@ -430,6 +436,16 @@ fn print_skip_report(paths: &[PathBuf]) {
         return;
     }
     println!("Skipped existing assets:");
+    for path in paths {
+        println!("  - {}", path.display());
+    }
+}
+
+fn print_removed_report(paths: &[PathBuf]) {
+    if paths.is_empty() {
+        return;
+    }
+    println!("Removed legacy assets:");
     for path in paths {
         println!("  - {}", path.display());
     }

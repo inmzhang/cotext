@@ -93,4 +93,5 @@ cotext tui
 ## Refreshing generated guidance
 
 - Project-local Codex guidance is generated from `cotext agent install codex`.
-- Repositories that also track a `.codex/skills/cotext-context/` mirror can refresh both copies with `cotext agent install all --codex-skill-dir ./.codex/skills/cotext-context --overwrite`.
+- The default tracked Codex skill target is `.codex/skills/cotext-context/`.
+- Use `--codex-skill-dir <path>` only when you also need a second copy in another Codex skill directory.

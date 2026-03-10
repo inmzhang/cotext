@@ -467,7 +467,7 @@ impl App {
         if let Some(entry) = self.selected_entry() {
             match copy_to_clipboard(&render_clipboard_packet(
                 &self.project,
-                &[entry.clone()],
+                std::slice::from_ref(entry),
                 self.preview_audience,
             )) {
                 Ok(()) => {
@@ -884,12 +884,11 @@ fn run_loop(
     let mut app = App::new(project)?;
     loop {
         terminal.draw(|frame| draw(frame, &mut app))?;
-        if event::poll(Duration::from_millis(150))? {
-            if let Event::Key(key) = event::read()? {
-                if app.handle_key(key)? {
-                    break;
-                }
-            }
+        if event::poll(Duration::from_millis(150))?
+            && let Event::Key(key) = event::read()?
+            && app.handle_key(key)?
+        {
+            break;
         }
     }
     Ok(())
@@ -1634,7 +1633,7 @@ fn tags_editor_value(tags: &BTreeSet<String>) -> String {
 
 fn parse_tags_input(input: &str) -> BTreeSet<String> {
     input
-        .split(|ch| ch == ',' || ch == '\n')
+        .split([',', '\n'])
         .map(str::trim)
         .filter(|tag| !tag.is_empty())
         .map(ToOwned::to_owned)

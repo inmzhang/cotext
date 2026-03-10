@@ -159,11 +159,10 @@ For this repository, the checked-in outputs are:
 
 - [AGENTS.md](../AGENTS.md)
 - [CLAUDE.md](../CLAUDE.md)
-- [.cotext/agents/codex/cotext-context/SKILL.md](../.cotext/agents/codex/cotext-context/SKILL.md)
+- [.codex/skills/cotext-context/SKILL.md](../.codex/skills/cotext-context/SKILL.md)
 - [.claude/skills/cotext-context/SKILL.md](../.claude/skills/cotext-context/SKILL.md)
 - [.claude/commands/cotext.md](../.claude/commands/cotext.md)
 - [.claude/commands/cotext-sync.md](../.claude/commands/cotext-sync.md)
-- [.codex/skills/cotext-context/SKILL.md](../.codex/skills/cotext-context/SKILL.md)
 
 ## Maintaining Guidance in the `cotext` Repo
 
@@ -173,8 +172,10 @@ When changing agent guidance in this repository:
 2. Regenerate the checked-in outputs:
 
    ```bash
-   cargo run -- agent install all --overwrite --codex-skill-dir ./.codex/skills/cotext-context
+   cargo run -- agent install all --overwrite
    ```
+
+   Add `--codex-skill-dir <path>` only when you intentionally want a second Codex skill copy outside the tracked `.codex/skills/cotext-context/` tree.
 
 3. Run validation:
 

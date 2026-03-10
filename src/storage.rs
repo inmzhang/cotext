@@ -132,9 +132,11 @@ impl Project {
     }
 
     pub fn load_entry(&self, id: &str) -> Result<Entry> {
-        let mut filter = EntryFilter::default();
-        filter.id = Some(id.to_string());
-        filter.include_archived = true;
+        let filter = EntryFilter {
+            id: Some(id.to_string()),
+            include_archived: true,
+            ..EntryFilter::default()
+        };
         let mut entries = self.list_entries(&filter)?;
         match entries.len() {
             0 => bail!("entry `{id}` was not found"),
@@ -237,15 +239,16 @@ impl Project {
         }
         fs::write(&path, serialize_entry(&entry)?)
             .with_context(|| format!("failed to write {}", path.display()))?;
-        if let Some(previous_path) = previous_path {
-            if previous_path != path && previous_path.exists() {
-                fs::remove_file(previous_path).with_context(|| {
-                    format!(
-                        "failed to remove superseded entry {}",
-                        previous_path.display()
-                    )
-                })?;
-            }
+        if let Some(previous_path) = previous_path
+            && previous_path != path
+            && previous_path.exists()
+        {
+            fs::remove_file(previous_path).with_context(|| {
+                format!(
+                    "failed to remove superseded entry {}",
+                    previous_path.display()
+                )
+            })?;
         }
         entry.path = path;
         Ok(entry)
@@ -262,15 +265,15 @@ fn matches_filter(entry: &Entry, filter: &EntryFilter) -> bool {
     if !filter.include_archived && entry.status() == EntryStatus::Archived {
         return false;
     }
-    if let Some(id) = &filter.id {
-        if entry.id() != id {
-            return false;
-        }
+    if let Some(id) = &filter.id
+        && entry.id() != id
+    {
+        return false;
     }
-    if let Some(statuses) = &filter.statuses {
-        if !statuses.contains(&entry.status()) {
-            return false;
-        }
+    if let Some(statuses) = &filter.statuses
+        && !statuses.contains(&entry.status())
+    {
+        return false;
     }
     if let Some(section_prefix) = &filter.section_prefix {
         match entry.section() {

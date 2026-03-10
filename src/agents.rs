@@ -11,6 +11,7 @@ const END_MARKER: &str = "<!-- COTEXT:END -->";
 #[derive(Clone, Debug, Default)]
 pub struct InstallReport {
     pub changed: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
 }
 
@@ -21,6 +22,10 @@ impl InstallReport {
 
     fn record_skipped(&mut self, path: PathBuf) {
         self.skipped.push(path);
+    }
+
+    fn record_removed(&mut self, path: PathBuf) {
+        self.removed.push(path);
     }
 }
 
@@ -40,15 +45,13 @@ pub fn install_codex(
         &mut report,
     )?;
 
-    let project_skill_root = project
-        .root
-        .join(".cotext")
-        .join("agents")
-        .join("codex")
-        .join("cotext-context");
+    let project_skill_root = default_codex_skill_root(project);
+    remove_legacy_codex_skill_root(project, &mut report)?;
     write_codex_skill_bundle(project, &project_skill_root, overwrite, &mut report)?;
 
-    if let Some(skill_dir) = codex_skill_dir {
+    if let Some(skill_dir) = codex_skill_dir
+        && skill_dir != project_skill_root.as_path()
+    {
         write_codex_skill_bundle(project, skill_dir, overwrite, &mut report)?;
     }
 
@@ -99,7 +102,7 @@ fn upsert_marked_markdown(
     path: &Path,
     header: &str,
     block: &str,
-    overwrite: bool,
+    _overwrite: bool,
     report: &mut InstallReport,
 ) -> Result<()> {
     let payload = format!("{START_MARKER}\n{block}\n{END_MARKER}\n");
@@ -123,8 +126,6 @@ fn upsert_marked_markdown(
             } else {
                 format!("{current}\n{payload}")
             }
-        } else if overwrite {
-            format!("{current}\n{payload}")
         } else {
             format!("{current}\n{payload}")
         }
@@ -159,6 +160,33 @@ fn write_codex_skill_bundle(
         overwrite,
         report,
     )?;
+    Ok(())
+}
+
+fn default_codex_skill_root(project: &Project) -> PathBuf {
+    project
+        .root
+        .join(".codex")
+        .join("skills")
+        .join("cotext-context")
+}
+
+fn legacy_codex_skill_root(project: &Project) -> PathBuf {
+    project
+        .root
+        .join(".cotext")
+        .join("agents")
+        .join("codex")
+        .join("cotext-context")
+}
+
+fn remove_legacy_codex_skill_root(project: &Project, report: &mut InstallReport) -> Result<()> {
+    let legacy_root = legacy_codex_skill_root(project);
+    if legacy_root.exists() {
+        fs::remove_dir_all(&legacy_root)
+            .with_context(|| format!("failed to remove {}", legacy_root.display()))?;
+        report.record_removed(legacy_root);
+    }
     Ok(())
 }
 
@@ -211,9 +239,9 @@ Use `cotext` as the canonical project context manager for `{project_name}`.
 
 ### Generated Assets
 
-- The project-local Codex skill scaffold lives under `.cotext/agents/codex/cotext-context/`.
+- The project-local Codex skill scaffold lives under `.codex/skills/cotext-context/`.
 - Refresh Codex guidance with `cotext agent install codex --overwrite`.
-- Repositories that also track a `.codex/skills/cotext-context/` mirror can refresh both copies with `cotext agent install codex --codex-skill-dir ./.codex/skills/cotext-context --overwrite`.
+- Use `--codex-skill-dir <path>` only when you also need a second copy in another Codex skill directory.
 "#
     )
 }
@@ -343,7 +371,8 @@ cotext tui
 ## Refreshing generated guidance
 
 - Project-local Codex guidance is generated from `cotext agent install codex`.
-- Repositories that also track a `.codex/skills/cotext-context/` mirror can refresh both copies with `cotext agent install all --codex-skill-dir ./.codex/skills/cotext-context --overwrite`.
+- The default tracked Codex skill target is `.codex/skills/cotext-context/`.
+- Use `--codex-skill-dir <path>` only when you also need a second copy in another Codex skill directory.
 "#
     )
 }
@@ -468,6 +497,7 @@ mod tests {
         assert!(block.contains("### Startup"));
         assert!(block.contains("cotext render --audience codex"));
         assert!(block.contains("cotext agent install codex --overwrite"));
+        assert!(block.contains(".codex/skills/cotext-context/"));
     }
 
     #[test]

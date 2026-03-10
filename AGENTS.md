@@ -28,9 +28,9 @@ Use `cotext` as the canonical project context manager for `cotext`.
 
 ### Generated Assets
 
-- The project-local Codex skill scaffold lives under `.cotext/agents/codex/cotext-context/`.
+- The project-local Codex skill scaffold lives under `.codex/skills/cotext-context/`.
 - Refresh Codex guidance with `cotext agent install codex --overwrite`.
-- Repositories that also track a `.codex/skills/cotext-context/` mirror can refresh both copies with `cotext agent install codex --codex-skill-dir ./.codex/skills/cotext-context --overwrite`.
+- Use `--codex-skill-dir <path>` only when you also need a second copy in another Codex skill directory.
 
 <!-- COTEXT:END -->
 

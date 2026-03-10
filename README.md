@@ -2,6 +2,8 @@
 
 `cotext` is a standalone Rust CLI and TUI for keeping project tracking context in one structured place instead of scattering raw markdown across ad hoc files.
 
+This project is built jointly by humans and OpenAI Codex. Treat AI-generated changes like any other contribution: review them, test them, and keep the durable project context in sync.
+
 It manages five context categories:
 
 - `design`
@@ -64,6 +66,20 @@ Explain the decision here.
 
 That keeps the storage readable while allowing the CLI and TUI to filter, group, and render it consistently.
 
+## Install
+
+Once `cotext` is published to crates.io, install it with:
+
+```bash
+cargo install cotext
+```
+
+For local development or a checkout from source:
+
+```bash
+cargo install --path .
+```
+
 ## Quick Start
 
 ```bash
@@ -106,10 +122,10 @@ Useful patterns:
 `cotext agent install codex` writes:
 
 - `AGENTS.md` guidance that tells Codex to read and update context through `cotext`
-- `.cotext/agents/codex/cotext-context/SKILL.md`
-- `.cotext/agents/codex/cotext-context/agents/openai.yaml`
+- `.codex/skills/cotext-context/SKILL.md`
+- `.codex/skills/cotext-context/agents/openai.yaml`
 
-If you also pass `--codex-skill-dir ~/.codex/skills/cotext-context`, the same skill bundle is installed into the live Codex skill directory.
+If you also pass `--codex-skill-dir <path>`, the same skill bundle is installed into that extra Codex skill directory as a second copy.
 
 ### Claude Code
 
@@ -156,28 +172,54 @@ Category guide:
 
 For the detailed workflow, maintenance notes, and regeneration steps for the checked-in agent guidance, see [docs/agent-workflow.md](docs/agent-workflow.md).
 
+## Development Checks
+
+This repository ships both GitHub Actions and `pre-commit` automation around the same Rust quality gate:
+
+- `cargo fmt --all -- --check`
+- `cargo check --all-targets --all-features`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test`
+
+Install the local hooks with:
+
+```bash
+pre-commit install
+```
+
+To run the full hook set on demand:
+
+```bash
+pre-commit run --all-files
+```
+
+Publishing is handled by GitHub Actions. The publish workflow expects a `CARGO_REGISTRY_TOKEN` repository secret, requires `Cargo.toml` to declare `license` or `license-file`, and verifies that a GitHub release tag like `v0.1.0` matches `Cargo.toml` before it runs `cargo publish`.
+
 ## TUI
 
 `cotext tui` opens a single-page terminal board with:
 
-- category cards across the top
+- live project stats and category cards across the top
 - a filtered entry list on the left
 - detail and preview/editor panes on the right
 - staged quick-create prompts for title, section, and tags before the first file write
 - packet preview modes for the current entry, current category, open category work, and open project work
 - clipboard export for the selected entry or the whole current category using the current preview audience
+- popup help and delete-confirmation panels without leaving the main board
 
 Key bindings:
 
 - `Tab` / `Shift-Tab`: switch category
 - `j` / `k`: move selection
-- `n`: create a new entry in the current category
+- `n` / `+`: create a new entry in the current category
+- `d` / `Delete`: delete the selected entry with confirmation
 - `e`: edit the selected body
 - `t`: edit the selected title
 - `s`: edit the selected section
 - `g`: edit the selected tags
 - `p`: cycle preview mode
 - `a`: cycle preview audience
+- `?` in browse mode, or `F1` anywhere: open or close help
 - `PageUp` / `PageDown`: scroll the preview pane
 - `Ctrl-s`: save changes
 - `Esc`: cancel editing
@@ -194,6 +236,7 @@ The first implementation is intentionally simple:
 - section filtering is prefix-based
 - the TUI edits one selected item at a time, but now covers body, title, section, and tags
 - new entries collect metadata before the initial file write so ids and paths start correct
+- selected entries can be deleted from the TUI, including pruning empty section directories on disk
 - packet preview can switch between entry, category, and open-work views without leaving the TUI
 - clipboard export is text-based and audience-aware, aimed at quick paste into an agent session
 

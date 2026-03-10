@@ -1,0 +1,53 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  crates-io:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify publish metadata
+        run: |
+          if ! grep -Eq '^license(|-file) = ' Cargo.toml; then
+            echo "::error::Cargo.toml must declare `license` or `license-file` before publishing to crates.io."
+            exit 1
+          fi
+
+      - name: Verify release tag matches Cargo.toml
+        if: github.event_name == 'release'
+        run: |
+          VERSION=$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::release tag $GITHUB_REF_NAME does not match Cargo.toml version $VERSION"
+            exit 1
+          fi
+
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run --locked
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked

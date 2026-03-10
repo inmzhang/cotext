@@ -2,6 +2,15 @@
 name = "cotext"
 version = "0.1.0"
 edition = "2024"
+description = "Structured project context for humans and coding agents, with a CLI and ratatui TUI."
+readme = "README.md"
+documentation = "https://docs.rs/cotext"
+homepage = "https://github.com/inmzhang/cotext"
+repository = "https://github.com/inmzhang/cotext"
+keywords = ["context", "cli", "tui", "agents", "productivity"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [".claude/**", ".codex/**", ".cotext/**", ".github/**"]
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.97"
