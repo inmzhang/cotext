@@ -9,7 +9,7 @@ tags:
 - docs
 - release
 created_at: 2026-03-10T08:45:51.931466714Z
-updated_at: 2026-03-10T09:27:37.186344565Z
+updated_at: 2026-03-10T14:27:15.044661566Z
 ---
 Completed
 - Added GitHub Actions CI for `cargo fmt --all -- --check`, `cargo check --all-targets --all-features`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test`.
@@ -34,3 +34,10 @@ Release
 
 Docs
 - Shortened the published README and switched the install section to the direct `cargo install cotext` guidance now that the crate is live.
+
+Release
+- Published the GitHub release `v0.1.1` with release notes via `gh release create v0.1.1 --title "v0.1.1" --generate-notes --latest` on commit `7c5dc1961f5a3152b6ed7fef1854e1c4b533ac90`: https://github.com/inmzhang/cotext/releases/tag/v0.1.1
+- Confirmed the `Publish` GitHub Actions workflow started from the `release` event for `v0.1.1`: https://github.com/inmzhang/cotext/actions/runs/22907419098
+
+Docs
+- Removed the README development section so the public README stays focused on install, commands, agent integration, and TUI usage.
