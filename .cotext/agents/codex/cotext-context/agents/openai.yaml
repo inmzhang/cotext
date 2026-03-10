@@ -1,0 +1,3 @@
+interface:
+  display_name: "Cotext Context"
+  short_description: "Read or update project context with cotext"
