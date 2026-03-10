@@ -9,7 +9,7 @@ tags:
 - docs
 - release
 created_at: 2026-03-10T08:45:51.931466714Z
-updated_at: 2026-03-10T08:51:55.629515481Z
+updated_at: 2026-03-10T09:27:37.186344565Z
 ---
 Completed
 - Added GitHub Actions CI for `cargo fmt --all -- --check`, `cargo check --all-targets --all-features`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test`.
@@ -27,3 +27,10 @@ Validation
 
 Next step
 - Set the `CARGO_REGISTRY_TOKEN` GitHub secret, then publish from a matching release tag or `workflow_dispatch`.
+
+Release
+- Published the GitHub release `v0.1.0` with release notes via `gh release create v0.1.0`.
+- Confirmed the `Publish` GitHub Actions workflow started from the `release` event: https://github.com/inmzhang/cotext/actions/runs/22895651383
+
+Docs
+- Shortened the published README and switched the install section to the direct `cargo install cotext` guidance now that the crate is live.
