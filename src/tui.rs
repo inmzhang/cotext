@@ -11,10 +11,12 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
+};
 use ratatui::{Frame, Terminal};
 use tui_textarea::TextArea;
 
@@ -24,6 +26,20 @@ use crate::model::{
 };
 use crate::render::{render_clipboard_packet, render_packet, render_single_entry};
 use crate::storage::{Project, slugify};
+
+const APP_BG: Color = Color::Rgb(6, 11, 19);
+const PANEL_BG: Color = Color::Rgb(15, 23, 42);
+const PANEL_ALT_BG: Color = Color::Rgb(19, 35, 58);
+const PANEL_MUTED_BG: Color = Color::Rgb(30, 41, 59);
+const TEXT_PRIMARY: Color = Color::Rgb(226, 232, 240);
+const TEXT_BRIGHT: Color = Color::Rgb(248, 250, 252);
+const TEXT_MUTED: Color = Color::Rgb(148, 163, 184);
+const ACCENT: Color = Color::Rgb(45, 212, 191);
+const ACCENT_WARM: Color = Color::Rgb(251, 191, 36);
+const INFO: Color = Color::Rgb(96, 165, 250);
+const SUCCESS: Color = Color::Rgb(74, 222, 128);
+const WARNING: Color = Color::Rgb(250, 204, 21);
+const DANGER: Color = Color::Rgb(248, 113, 113);
 
 pub fn run(project: Project) -> Result<()> {
     enable_raw_mode()?;
@@ -65,9 +81,9 @@ impl Mode {
             Self::EditTitle => "title",
             Self::EditSection => "section",
             Self::EditTags => "tags",
-            Self::CreateTitle => "new title",
-            Self::CreateSection => "new section",
-            Self::CreateTags => "new tags",
+            Self::CreateTitle => "add title",
+            Self::CreateSection => "add section",
+            Self::CreateTags => "add tags",
         }
     }
 }
@@ -114,6 +130,12 @@ struct CreateDraft {
     tags: BTreeSet<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Overlay {
+    Help,
+    ConfirmDelete { id: String, title: String },
+}
+
 struct App {
     project: Project,
     entries: Vec<Entry>,
@@ -127,6 +149,7 @@ struct App {
     preview_audience: Audience,
     preview_scroll: u16,
     create_draft: Option<CreateDraft>,
+    overlay: Option<Overlay>,
 }
 
 impl App {
@@ -144,6 +167,7 @@ impl App {
             preview_audience: Audience::Agent,
             preview_scroll: 0,
             create_draft: None,
+            overlay: None,
         };
         app.refresh(None)?;
         Ok(app)
@@ -215,15 +239,35 @@ impl App {
         self.selected_entry().map(|entry| entry.id().to_string())
     }
 
+    fn total_entries(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn open_entry_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| is_open_entry(entry))
+            .count()
+    }
+
+    fn category_counts(&self, category: Category) -> (usize, usize) {
+        let total = self
+            .entries
+            .iter()
+            .filter(|entry| entry.category() == category)
+            .count();
+        let open = self
+            .entries
+            .iter()
+            .filter(|entry| entry.category() == category && is_open_entry(entry))
+            .count();
+        (open, total)
+    }
+
     fn set_field_editor(&mut self, block_title: impl Into<String>, initial_value: String) {
         let block_title = block_title.into();
         self.field_editor = TextArea::from(vec![initial_value]);
-        self.field_editor.set_block(
-            Block::default()
-                .title(block_title)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        );
+        configure_text_area(&mut self.field_editor, block_title, INFO);
     }
 
     fn field_text_inline(&self) -> String {
@@ -271,11 +315,10 @@ impl App {
             .map(|entry| (entry.title().to_string(), entry.body.clone()))
         {
             self.body_editor = TextArea::from(body.lines());
-            self.body_editor.set_block(
-                Block::default()
-                    .title("Body Editor (Ctrl-S to save, Esc to cancel)")
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded),
+            configure_text_area(
+                &mut self.body_editor,
+                "Body Editor (Ctrl-S to save, Esc to cancel)",
+                ACCENT,
             );
             self.mode = Mode::EditBody;
             self.status = format!("Editing body for `{title}`");
@@ -326,11 +369,52 @@ impl App {
             tags: BTreeSet::new(),
         });
         self.set_field_editor(
-            "New Entry Title (Ctrl-S to continue, Esc to cancel)",
+            "Add Entry Title (Ctrl-S to continue, Esc to cancel)",
             String::new(),
         );
         self.mode = Mode::CreateTitle;
-        self.status = format!("New {} entry: set the title", category.dir_name());
+        self.status = format!("Add {} entry: set the title", category.dir_name());
+    }
+
+    fn toggle_help(&mut self) {
+        if self.overlay == Some(Overlay::Help) {
+            self.overlay = None;
+            self.status = "Help closed".to_string();
+        } else if self.overlay.is_none() {
+            self.overlay = Some(Overlay::Help);
+            self.status = "Help open: Esc, ?, or F1 closes the overlay".to_string();
+        }
+    }
+
+    fn prompt_delete(&mut self) {
+        let Some((id, title)) = self
+            .selected_entry()
+            .map(|entry| (entry.id().to_string(), entry.title().to_string()))
+        else {
+            self.status = "No entry selected to delete".to_string();
+            return;
+        };
+        self.overlay = Some(Overlay::ConfirmDelete {
+            id,
+            title: title.clone(),
+        });
+        self.status = format!("Delete `{title}`? Press Enter to confirm.");
+    }
+
+    fn confirm_delete(&mut self) -> Result<()> {
+        let Some(Overlay::ConfirmDelete { id, title }) = self.overlay.clone() else {
+            return Ok(());
+        };
+        self.project.delete_entry(&id)?;
+        self.overlay = None;
+        self.refresh(None)?;
+        self.status = format!("Deleted `{title}`");
+        Ok(())
+    }
+
+    fn close_overlay(&mut self, message: impl Into<String>) {
+        self.overlay = None;
+        self.status = message.into();
     }
 
     fn cycle_status(&mut self) -> Result<()> {
@@ -549,10 +633,10 @@ impl App {
                     .as_ref()
                     .and_then(|draft| draft.section.clone())
                     .unwrap_or_default();
-                self.set_field_editor("New Entry Section (optional, Ctrl-S to continue)", section);
+                self.set_field_editor("Add Entry Section (optional, Ctrl-S to continue)", section);
                 self.mode = Mode::CreateSection;
                 self.status = format!(
-                    "New {} entry: set the section (optional)",
+                    "Add {} entry: set the section (optional)",
                     self.current_category().dir_name()
                 );
             }
@@ -566,10 +650,10 @@ impl App {
                     .as_ref()
                     .map(|draft| tags_editor_value(&draft.tags))
                     .unwrap_or_default();
-                self.set_field_editor("New Entry Tags (comma or newline separated)", existing_tags);
+                self.set_field_editor("Add Entry Tags (comma or newline separated)", existing_tags);
                 self.mode = Mode::CreateTags;
                 self.status = format!(
-                    "New {} entry: set tags (optional)",
+                    "Add {} entry: set tags (optional)",
                     self.current_category().dir_name()
                 );
             }
@@ -601,7 +685,7 @@ impl App {
         if self.mode.is_create() {
             self.create_draft = None;
             self.mode = Mode::Browse;
-            self.status = "New entry cancelled".to_string();
+            self.status = "Add entry cancelled".to_string();
             return;
         }
         self.mode = Mode::Browse;
@@ -707,7 +791,36 @@ impl App {
         })
     }
 
+    fn handle_overlay_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match self.overlay.clone() {
+            Some(Overlay::Help) => match key.code {
+                KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?') => {
+                    self.close_overlay("Help closed");
+                }
+                _ => {}
+            },
+            Some(Overlay::ConfirmDelete { .. }) => match key.code {
+                KeyCode::Enter | KeyCode::Char('y') => self.confirm_delete()?,
+                KeyCode::Esc | KeyCode::Char('n') => self.close_overlay("Delete cancelled"),
+                _ => {}
+            },
+            None => {}
+        }
+        Ok(false)
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.overlay.is_some() {
+            return self.handle_overlay_key(key);
+        }
+
+        if key.code == KeyCode::F(1)
+            || (self.mode == Mode::Browse && key.code == KeyCode::Char('?'))
+        {
+            self.toggle_help();
+            return Ok(false);
+        }
+
         if key.code == KeyCode::Char('q') && self.mode == Mode::Browse {
             return Ok(true);
         }
@@ -727,7 +840,8 @@ impl App {
                 KeyCode::Char('t') => self.start_title_edit(),
                 KeyCode::Char('s') => self.start_section_edit(),
                 KeyCode::Char('g') => self.start_tags_edit(),
-                KeyCode::Char('n') => self.start_create(),
+                KeyCode::Char('n') | KeyCode::Char('+') => self.start_create(),
+                KeyCode::Char('d') | KeyCode::Delete => self.prompt_delete(),
                 KeyCode::Char('S') => self.cycle_status()?,
                 KeyCode::Char('p') => self.cycle_preview_mode(),
                 KeyCode::Char('a') => self.cycle_preview_audience(),
@@ -782,13 +896,18 @@ fn run_loop(
 }
 
 fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    frame.render_widget(
+        Block::default().style(Style::default().bg(APP_BG)),
+        frame.area(),
+    );
     let layout = Layout::default()
+        .margin(1)
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
             Constraint::Length(5),
+            Constraint::Length(4),
             Constraint::Min(10),
-            Constraint::Length(2),
+            Constraint::Length(4),
         ])
         .split(frame.area());
 
@@ -796,68 +915,95 @@ fn draw(frame: &mut Frame<'_>, app: &mut App) {
     draw_category_cards(frame, layout[1], app);
     draw_body(frame, layout[2], app);
     draw_footer(frame, layout[3], app);
+    draw_overlay(frame, app);
 }
 
 fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let header = Paragraph::new(vec![
         Line::from(vec![
+            pill("cotext", ACCENT, APP_BG),
+            Span::raw(" "),
             Span::styled(
-                format!(" cotext :: {} ", app.project.config.name),
+                app.project.config.name.clone(),
                 Style::default()
-                    .fg(Color::Rgb(246, 211, 101))
+                    .fg(TEXT_BRIGHT)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("single-page context board"),
+            Span::raw("  "),
+            pill(
+                format!("mode {}", app.mode.label()),
+                category_color(app.current_category()),
+                APP_BG,
+            ),
+            Span::raw(" "),
+            pill(
+                format!("preview {}", app.preview_mode.label()),
+                INFO,
+                APP_BG,
+            ),
         ]),
         Line::from(Span::styled(
-            format!(" root: {} ", app.project.root.display()),
-            Style::default().fg(Color::Rgb(148, 163, 184)),
+            format!("root: {}", app.project.root.display()),
+            Style::default().fg(TEXT_MUTED),
         )),
+        Line::from(vec![
+            pill(
+                format!("{} total", app.total_entries()),
+                ACCENT_WARM,
+                APP_BG,
+            ),
+            Span::raw(" "),
+            pill(format!("{} open", app.open_entry_count()), SUCCESS, APP_BG),
+            Span::raw(" "),
+            pill(
+                format!("{} visible", app.visible_indices().len()),
+                INFO,
+                APP_BG,
+            ),
+            Span::raw(" "),
+            Span::styled(
+                app.current_category().label(),
+                Style::default()
+                    .fg(TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
     ])
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .style(Style::default().bg(Color::Rgb(15, 23, 42))),
-    );
+    .block(panel_block("Context Board", ACCENT))
+    .wrap(Wrap { trim: true });
     frame.render_widget(header, area);
 }
 
 fn draw_category_cards(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let constraints = vec![Constraint::Ratio(1, 5); Category::ALL.len()];
+    let constraints = vec![Constraint::Fill(1); Category::ALL.len()];
     let cards = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(constraints)
         .split(area);
     for (index, category) in Category::ALL.iter().enumerate() {
-        let count = app
-            .entries
-            .iter()
-            .filter(|entry| entry.category() == *category)
-            .count();
+        let (open, total) = app.category_counts(*category);
         let active = index == app.category_index;
+        let accent = category_color(*category);
         let block = Block::default()
-            .title(format!(" {}", category.dir_name()))
+            .title(format!(" {} ", category.dir_name()))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .style(if active {
-                Style::default()
-                    .fg(Color::Rgb(15, 23, 42))
-                    .bg(Color::Rgb(94, 234, 212))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(Color::Rgb(226, 232, 240))
-                    .bg(Color::Rgb(30, 41, 59))
-            });
+            .border_style(Style::default().fg(if active { accent } else { PANEL_MUTED_BG }))
+            .style(Style::default().bg(if active { PANEL_ALT_BG } else { PANEL_BG }));
         let paragraph = Paragraph::new(vec![
             Line::from(Span::styled(
                 category.label(),
-                Style::default().add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(if active { TEXT_BRIGHT } else { TEXT_PRIMARY })
+                    .add_modifier(Modifier::BOLD),
             )),
-            Line::from(format!("{count} entries")),
+            Line::from(Span::styled(
+                format!("{open} open / {total} total"),
+                Style::default().fg(TEXT_MUTED),
+            )),
         ])
         .block(block)
+        .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
         frame.render_widget(paragraph, cards[index]);
     }
@@ -866,7 +1012,7 @@ fn draw_category_cards(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn draw_body(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .constraints([Constraint::Percentage(37), Constraint::Percentage(63)])
         .split(area);
     draw_entry_list(frame, columns[0], app);
     draw_detail(frame, columns[1], app);
@@ -876,21 +1022,30 @@ fn draw_entry_list(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let visible = app.visible_indices();
     let items = visible
         .iter()
-        .filter_map(|index| app.entries.get(*index))
-        .map(|entry| {
+        .enumerate()
+        .filter_map(|(row, index)| app.entries.get(*index).map(|entry| (row, entry)))
+        .map(|(row, entry)| {
             let mut lines = vec![Line::from(Span::styled(
                 entry.title().to_string(),
                 Style::default().add_modifier(Modifier::BOLD),
             ))];
-            let meta = match entry.section() {
-                Some(section) => format!("{}  |  {}", entry.status(), section),
-                None => entry.status().to_string(),
-            };
-            lines.push(Line::from(Span::styled(
-                meta,
-                Style::default().fg(Color::Rgb(148, 163, 184)),
-            )));
-            ListItem::new(lines)
+            let mut meta = vec![status_badge(entry.status()), Span::raw(" ")];
+            meta.push(Span::styled(
+                entry.section().unwrap_or("(root)").to_string(),
+                Style::default().fg(TEXT_MUTED),
+            ));
+            if let Some(tags) = compact_tag_summary(&entry.front_matter.tags) {
+                meta.push(Span::styled(
+                    format!("  |  {tags}"),
+                    Style::default().fg(INFO),
+                ));
+            }
+            lines.push(Line::from(meta));
+            ListItem::new(lines).style(Style::default().bg(if row % 2 == 0 {
+                PANEL_BG
+            } else {
+                PANEL_ALT_BG
+            }))
         })
         .collect::<Vec<_>>();
 
@@ -899,19 +1054,21 @@ fn draw_entry_list(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         state.select(Some(app.selected));
     }
     let list = List::new(items)
-        .block(
-            Block::default()
-                .title(format!(" {} list ", app.current_category().dir_name()))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        )
+        .block(panel_block(
+            format!(
+                "{} entries [{}]",
+                app.current_category().dir_name(),
+                visible.len()
+            ),
+            category_color(app.current_category()),
+        ))
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(15, 118, 110))
-                .fg(Color::Rgb(248, 250, 252))
+                .bg(Color::Rgb(14, 116, 144))
+                .fg(TEXT_BRIGHT)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol(">> ");
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -941,12 +1098,7 @@ fn draw_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
                 .map(|entry| render_single_entry(&app.field_preview_entry(entry)))
                 .unwrap_or_else(|| "No entry selected.".to_string());
             let preview_widget = Paragraph::new(preview)
-                .block(
-                    Block::default()
-                        .title(" Preview ")
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded),
-                )
+                .block(panel_block("Preview", INFO))
                 .wrap(Wrap { trim: false });
             frame.render_widget(preview_widget, split[1]);
         }
@@ -985,31 +1137,50 @@ fn draw_selected_meta(frame: &mut Frame<'_>, area: Rect, app: &App, selected: Op
             Span::styled(
                 title,
                 Style::default()
-                    .fg(Color::Rgb(248, 250, 252))
+                    .fg(TEXT_BRIGHT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::styled(
-                format!("[{status_badge}]"),
-                Style::default().fg(Color::Rgb(94, 234, 212)),
+            pill(
+                status_badge,
+                status_color(selected.map(Entry::status).unwrap_or(EntryStatus::Draft)),
+                APP_BG,
+            ),
+            Span::raw(" "),
+            pill(
+                app.current_category().dir_name(),
+                category_color(app.current_category()),
+                APP_BG,
             ),
         ]),
-        Line::from(format!("id: {id}")),
-        Line::from(format!("section: {section}")),
-        Line::from(format!("tags: {tags}")),
-        Line::from(format!("updated: {updated}")),
-        Line::from(format!(
-            "preview: {} [{}]",
-            app.preview_mode.label(),
-            app.preview_audience
-        )),
+        Line::from(vec![
+            Span::styled("id: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(id, Style::default().fg(TEXT_PRIMARY)),
+        ]),
+        Line::from(vec![
+            Span::styled("section: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(section, Style::default().fg(TEXT_PRIMARY)),
+        ]),
+        Line::from(vec![
+            Span::styled("tags: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(tags, Style::default().fg(INFO)),
+        ]),
+        Line::from(vec![
+            Span::styled("updated: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(updated, Style::default().fg(TEXT_PRIMARY)),
+        ]),
+        Line::from(vec![
+            Span::styled("preview: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                format!("{} [{}]", app.preview_mode.label(), app.preview_audience),
+                Style::default().fg(TEXT_PRIMARY),
+            ),
+        ]),
     ])
-    .block(
-        Block::default()
-            .title(" Detail ")
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded),
-    )
+    .block(panel_block(
+        "Selected Entry",
+        category_color(app.current_category()),
+    ))
     .wrap(Wrap { trim: true });
     frame.render_widget(meta, area);
 }
@@ -1021,12 +1192,7 @@ fn draw_browse_preview(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
 
     let preview = Paragraph::new(app.browse_preview_contents())
-        .block(
-            Block::default()
-                .title(app.browse_preview_title())
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        )
+        .block(panel_block(app.browse_preview_title(), INFO))
         .scroll((app.preview_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(preview, area);
@@ -1047,18 +1213,15 @@ fn draw_create_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Line::from(vec![
             Span::styled(
                 format!(
-                    "New {} entry",
+                    "Add {} entry",
                     preview_entry.front_matter.category.dir_name()
                 ),
                 Style::default()
-                    .fg(Color::Rgb(248, 250, 252))
+                    .fg(TEXT_BRIGHT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::styled(
-                format!("[{}]", preview_entry.status()),
-                Style::default().fg(Color::Rgb(94, 234, 212)),
-            ),
+            status_badge(preview_entry.status()),
         ]),
         Line::from(format!("id preview: {}", preview_entry.id())),
         Line::from(format!(
@@ -1072,12 +1235,7 @@ fn draw_create_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Line::from(format!("prompt: {}", app.mode.label())),
         Line::from("flow: title -> section -> tags -> body"),
     ])
-    .block(
-        Block::default()
-            .title(" New Entry ")
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded),
-    )
+    .block(panel_block("Add Entry", ACCENT_WARM))
     .wrap(Wrap { trim: true });
     frame.render_widget(meta, rows[0]);
 
@@ -1087,49 +1245,375 @@ fn draw_create_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         .split(rows[1]);
     frame.render_widget(&app.field_editor, split[0]);
     let preview = Paragraph::new(render_single_entry(&preview_entry))
-        .block(
-            Block::default()
-                .title(" Preview ")
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        )
+        .block(panel_block("Preview", INFO))
         .wrap(Wrap { trim: false });
     frame.render_widget(preview, split[1]);
 }
 
 fn draw_empty_detail(frame: &mut Frame<'_>, area: Rect) {
-    let empty = Paragraph::new("No entries in this category yet. Press `n` to create one.")
-        .block(
-            Block::default()
-                .title(" Empty ")
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        )
+    let empty = Paragraph::new("No entries in this category yet. Press `n` or `+` to add one.")
+        .block(panel_block("Empty", PANEL_MUTED_BG))
         .wrap(Wrap { trim: true });
     frame.render_widget(empty, area);
 }
 
 fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let footer = Paragraph::new(Line::from(vec![
-        Span::styled(
-            " status ",
-            Style::default()
-                .bg(Color::Rgb(234, 179, 8))
-                .fg(Color::Rgb(15, 23, 42))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(" {}", app.status)),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded),
-    );
+    let footer = Paragraph::new(vec![
+        Line::from(footer_hint_spans(app)),
+        Line::from(vec![
+            pill("status", ACCENT_WARM, APP_BG),
+            Span::raw(" "),
+            Span::styled(app.status.clone(), Style::default().fg(TEXT_PRIMARY)),
+        ]),
+    ])
+    .block(panel_block("Commands", PANEL_MUTED_BG))
+    .wrap(Wrap { trim: true });
     frame.render_widget(footer, area);
 }
 
+fn draw_overlay(frame: &mut Frame<'_>, app: &App) {
+    match app.overlay.as_ref() {
+        Some(Overlay::Help) => draw_help_popup(frame, app),
+        Some(Overlay::ConfirmDelete { id, title }) => draw_delete_popup(frame, id, title),
+        None => {}
+    }
+}
+
+fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
+    let popup = centered_rect(frame.area(), 96, 22);
+    frame.render_widget(Clear, popup);
+    let block = modal_block("Quick Help", ACCENT);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(8),
+            Constraint::Length(3),
+        ])
+        .split(inner);
+
+    let summary = Paragraph::new(vec![
+        Line::from(vec![
+            pill(format!("mode {}", app.mode.label()), category_color(app.current_category()), APP_BG),
+            Span::raw(" "),
+            pill(
+                format!("category {}", app.current_category().dir_name()),
+                category_color(app.current_category()),
+                APP_BG,
+            ),
+            Span::raw(" "),
+            pill(
+                format!("preview {} [{}]", app.preview_mode.label(), app.preview_audience),
+                INFO,
+                APP_BG,
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Use F1 anywhere to toggle help. The board underneath stays intact while the overlay is open.",
+            Style::default().fg(TEXT_MUTED),
+        )),
+    ])
+    .block(panel_block("Session", PANEL_MUTED_BG))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(summary, rows[0]);
+
+    let body_direction = if rows[1].width < 88 {
+        Direction::Vertical
+    } else {
+        Direction::Horizontal
+    };
+    let body = Layout::default()
+        .direction(body_direction)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[1]);
+
+    let browse_help = Paragraph::new(vec![
+        Line::from(vec![
+            keycap("Tab"),
+            Span::styled(" switch category", Style::default().fg(TEXT_MUTED)),
+        ]),
+        Line::from(vec![
+            keycap("j/k"),
+            Span::styled(" move selection", Style::default().fg(TEXT_MUTED)),
+        ]),
+        Line::from(vec![
+            keycap("n/+"),
+            Span::styled(
+                " add entry in the current category",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            keycap("d"),
+            Span::styled(
+                " delete the selected entry",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            keycap("S"),
+            Span::styled(" cycle entry status", Style::default().fg(TEXT_MUTED)),
+        ]),
+        Line::from(vec![
+            keycap("r"),
+            Span::styled(
+                " refresh entries from disk",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            keycap("q"),
+            Span::styled(" quit from browse mode", Style::default().fg(TEXT_MUTED)),
+        ]),
+    ])
+    .block(panel_block(
+        "Browse and Organize",
+        category_color(app.current_category()),
+    ))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(browse_help, body[0]);
+
+    let write_help = Paragraph::new(vec![
+        Line::from(vec![
+            keycap("e"),
+            Span::styled(" edit body", Style::default().fg(TEXT_MUTED)),
+        ]),
+        Line::from(vec![
+            keycap("t/s/g"),
+            Span::styled(
+                " edit title, section, and tags",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            keycap("Ctrl-S"),
+            Span::styled(
+                " save edits or advance the add-entry flow",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            keycap("Esc"),
+            Span::styled(
+                " cancel the current editor or popup",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            keycap("p/a"),
+            Span::styled(
+                " change preview scope and audience",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            keycap("PgUp/PgDn"),
+            Span::styled(" scroll long previews", Style::default().fg(TEXT_MUTED)),
+        ]),
+        Line::from(vec![
+            keycap("c/C"),
+            Span::styled(
+                " copy the selected or current-category packet",
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]),
+    ])
+    .block(panel_block("Edit and Preview", INFO))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(write_help, body[1]);
+
+    let tip = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "Add flow: title -> section -> tags -> body. Delete removes the markdown file from .cotext/entries and prunes empty section directories.",
+            Style::default().fg(TEXT_PRIMARY),
+        )),
+        Line::from(Span::styled(
+            "Close help with Esc, ?, or F1.",
+            Style::default().fg(TEXT_MUTED),
+        )),
+    ])
+    .block(panel_block("Tips", ACCENT_WARM))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(tip, rows[2]);
+}
+
+fn draw_delete_popup(frame: &mut Frame<'_>, id: &str, title: &str) {
+    let popup = centered_rect(frame.area(), 68, 10);
+    frame.render_widget(Clear, popup);
+    let body = Paragraph::new(vec![
+        Line::from(vec![
+            pill("delete", DANGER, APP_BG),
+            Span::raw(" "),
+            Span::styled(
+                "This removes the entry from disk.",
+                Style::default().fg(TEXT_PRIMARY),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("title: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(
+                title.to_string(),
+                Style::default()
+                    .fg(TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("id: ", Style::default().fg(TEXT_MUTED)),
+            Span::styled(id.to_string(), Style::default().fg(TEXT_PRIMARY)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            keycap("Enter"),
+            Span::styled(" confirm", Style::default().fg(TEXT_MUTED)),
+            Span::raw("  "),
+            keycap("Esc"),
+            Span::styled(" cancel", Style::default().fg(TEXT_MUTED)),
+        ]),
+    ])
+    .block(modal_block("Delete Entry", DANGER))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(body, popup);
+}
+
+fn panel_block(title: impl Into<String>, border_color: Color) -> Block<'static> {
+    Block::default()
+        .title(format!(" {} ", title.into()))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .style(Style::default().fg(TEXT_PRIMARY).bg(PANEL_BG))
+}
+
+fn modal_block(title: impl Into<String>, border_color: Color) -> Block<'static> {
+    Block::default()
+        .title(format!(" {} ", title.into()))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .style(Style::default().fg(TEXT_PRIMARY).bg(PANEL_ALT_BG))
+}
+
+fn configure_text_area(
+    editor: &mut TextArea<'static>,
+    title: impl Into<String>,
+    border_color: Color,
+) {
+    editor.set_style(Style::default().fg(TEXT_PRIMARY).bg(PANEL_ALT_BG));
+    editor.set_cursor_style(Style::default().fg(APP_BG).bg(ACCENT_WARM));
+    editor.set_cursor_line_style(Style::default().bg(Color::Rgb(27, 45, 72)));
+    editor.set_block(modal_block(title, border_color));
+}
+
+fn category_color(category: Category) -> Color {
+    match category {
+        Category::Design => INFO,
+        Category::Note => ACCENT,
+        Category::Progress => SUCCESS,
+        Category::Todo => ACCENT_WARM,
+        Category::Deferred => DANGER,
+    }
+}
+
+fn status_color(status: EntryStatus) -> Color {
+    match status {
+        EntryStatus::Draft => TEXT_MUTED,
+        EntryStatus::Active => ACCENT,
+        EntryStatus::Planned => INFO,
+        EntryStatus::Blocked => DANGER,
+        EntryStatus::Done => SUCCESS,
+        EntryStatus::Deferred => WARNING,
+        EntryStatus::Archived => PANEL_MUTED_BG,
+    }
+}
+
+fn pill(label: impl Into<String>, bg: Color, fg: Color) -> Span<'static> {
+    Span::styled(
+        format!(" {} ", label.into()),
+        Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn keycap(label: impl Into<String>) -> Span<'static> {
+    Span::styled(
+        format!(" {} ", label.into()),
+        Style::default()
+            .bg(PANEL_MUTED_BG)
+            .fg(TEXT_BRIGHT)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn status_badge(status: EntryStatus) -> Span<'static> {
+    pill(status.badge(), status_color(status), APP_BG)
+}
+
+fn footer_hint_spans(app: &App) -> Vec<Span<'static>> {
+    let hints = match app.overlay.as_ref() {
+        Some(Overlay::Help) => vec![("Esc", "close help"), ("F1", "toggle help")],
+        Some(Overlay::ConfirmDelete { .. }) => {
+            vec![("Enter", "confirm delete"), ("Esc", "cancel")]
+        }
+        None => match app.mode {
+            Mode::Browse => vec![
+                ("Tab", "category"),
+                ("j/k", "move"),
+                ("n/+", "add"),
+                ("d", "delete"),
+                ("?", "help"),
+                ("p/a", "preview"),
+                ("c/C", "copy"),
+                ("q", "quit"),
+            ],
+            Mode::EditBody | Mode::EditTitle | Mode::EditSection | Mode::EditTags => {
+                vec![("Ctrl-S", "save"), ("Esc", "cancel"), ("F1", "help")]
+            }
+            Mode::CreateTitle | Mode::CreateSection | Mode::CreateTags => {
+                vec![("Ctrl-S", "continue"), ("Esc", "cancel"), ("F1", "help")]
+            }
+        },
+    };
+
+    let mut spans = Vec::new();
+    for (index, (key, label)) in hints.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(keycap(key));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(TEXT_MUTED),
+        ));
+    }
+    spans
+}
+
+fn compact_tag_summary(tags: &BTreeSet<String>) -> Option<String> {
+    if tags.is_empty() {
+        return None;
+    }
+
+    let mut preview = tags.iter().take(2).cloned().collect::<Vec<_>>();
+    let remaining = tags.len().saturating_sub(preview.len());
+    if remaining > 0 {
+        preview.push(format!("+{remaining}"));
+    }
+    Some(preview.join(", "))
+}
+
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width.saturating_sub(2)).max(1);
+    let height = height.min(area.height.saturating_sub(2)).max(1);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    Rect::new(x, y, width, height)
+}
+
 fn default_status_message() -> &'static str {
-    "Tab: category  j/k: move  e/t/s/g: edit  n: new  p/a: preview  PgUp/PgDn: scroll  S: status  c/C: copy  q: quit"
+    "Browse the current category, or press ? for help."
 }
 
 fn is_open_entry(entry: &Entry) -> bool {
@@ -1291,6 +1775,77 @@ mod tests {
             .map(|entry| entry.title().to_string())
             .collect::<Vec<_>>();
         assert_eq!(preview_titles, vec!["Keep me open".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn plus_shortcut_starts_add_entry_flow() -> Result<()> {
+        let project = seeded_project()?;
+        let mut app = App::new(project)?;
+        app.category_index = 3;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE))?;
+
+        assert_eq!(app.mode, Mode::CreateTitle);
+        assert!(app.create_draft.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn delete_confirmation_removes_selected_entry() -> Result<()> {
+        let project = seeded_project()?;
+        project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Keep me".to_string(),
+            section: None,
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::new(),
+            body: Some("Body".to_string()),
+        })?;
+        project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Delete me".to_string(),
+            section: None,
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::new(),
+            body: Some("Body".to_string()),
+        })?;
+
+        let mut app = App::new(project)?;
+        app.category_index = 3;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))?;
+        assert_eq!(
+            app.overlay,
+            Some(Overlay::ConfirmDelete {
+                id: "delete-me".to_string(),
+                title: "Delete me".to_string(),
+            })
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))?;
+
+        let titles = app
+            .visible_indices()
+            .into_iter()
+            .filter_map(|index| app.entries.get(index))
+            .map(|entry| entry.title().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(titles, vec!["Keep me".to_string()]);
+        assert!(app.overlay.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn help_overlay_toggles_from_browse() -> Result<()> {
+        let project = seeded_project()?;
+        let mut app = App::new(project)?;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE))?;
+        assert_eq!(app.overlay, Some(Overlay::Help));
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))?;
+        assert!(app.overlay.is_none());
         Ok(())
     }
 }

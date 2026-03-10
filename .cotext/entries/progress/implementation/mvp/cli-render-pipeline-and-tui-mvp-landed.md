@@ -8,7 +8,7 @@ tags:
 - cli
 - tui
 created_at: 2026-03-10T05:17:21.625518189Z
-updated_at: 2026-03-10T05:47:47.543192064Z
+updated_at: 2026-03-10T08:34:11.179071407Z
 ---
 The initial implementation now supports project initialization, structured entry creation, list/show/render flows, agent asset generation, and a ratatui single-page editor.
 
@@ -26,3 +26,13 @@ Validation
 
 Next step
 - Add in-TUI filtering and search so larger projects do not rely only on category tabs and packet previews.
+
+Completed
+- Added storage-backed entry deletion plus empty-section pruning so the TUI can remove entries cleanly.
+- Added modal help and delete-confirmation overlays, plus a `+` shortcut alongside `n` for add-entry flow.
+- Restyled the TUI with a stronger palette, live stats header, richer category cards, denser entry metadata rows, and a command footer.
+
+Validation
+- `cargo fmt` passes.
+- `cargo test` passes.
+- Added TUI state tests for the `+` add-entry shortcut, delete confirmation, and help overlay toggling.

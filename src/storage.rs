@@ -221,6 +221,14 @@ impl Project {
         self.persist_entry(updated, Some(previous_path.as_path()))
     }
 
+    pub fn delete_entry(&self, id: &str) -> Result<Entry> {
+        let entry = self.load_entry(id)?;
+        fs::remove_file(&entry.path)
+            .with_context(|| format!("failed to delete {}", entry.path.display()))?;
+        prune_empty_section_dirs(entry.path.parent(), &self.entry_dir(entry.category()))?;
+        Ok(entry)
+    }
+
     fn persist_entry(&self, mut entry: Entry, previous_path: Option<&Path>) -> Result<Entry> {
         let path = entry_path(self, &entry.front_matter);
         if let Some(parent) = path.parent() {
@@ -282,6 +290,26 @@ fn entry_path(project: &Project, front_matter: &EntryFrontMatter) -> PathBuf {
     }
     path.push(format!("{}.md", front_matter.id));
     path
+}
+
+fn prune_empty_section_dirs(start: Option<&Path>, stop: &Path) -> Result<()> {
+    let mut current = start.map(Path::to_path_buf);
+    while let Some(path) = current {
+        if path == stop {
+            break;
+        }
+
+        let mut entries =
+            fs::read_dir(&path).with_context(|| format!("failed to inspect {}", path.display()))?;
+        if entries.next().is_some() {
+            break;
+        }
+
+        fs::remove_dir(&path)
+            .with_context(|| format!("failed to remove empty directory {}", path.display()))?;
+        current = path.parent().map(Path::to_path_buf);
+    }
+    Ok(())
 }
 
 fn parse_entry(raw: &str, path: &Path) -> Result<Entry> {
@@ -397,5 +425,29 @@ mod tests {
         assert_eq!(slugify("Hello, World!"), "hello-world");
         assert_eq!(slugify("  "), "entry");
         assert_eq!(slugify("already-slugged"), "already-slugged");
+    }
+
+    #[test]
+    fn delete_entry_removes_file_and_empty_section_dirs() -> Result<()> {
+        let temp = TempDir::new()?;
+        let project = Project::init(temp.path(), Some("demo".to_string()), false)?;
+        let entry = project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Delete me".to_string(),
+            section: Some("agents/codex".to_string()),
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::new(),
+            body: Some("Cleanup body".to_string()),
+        })?;
+
+        let entry_path = entry.path.clone();
+        let section_root = project.entry_dir(Category::Todo).join("agents");
+
+        project.delete_entry(entry.id())?;
+
+        assert!(!entry_path.exists());
+        assert!(!section_root.exists());
+        assert!(project.load_entry(entry.id()).is_err());
+        Ok(())
     }
 }
