@@ -16,6 +16,7 @@ The tool is built for both humans and code agents. It can:
 - render a concatenated packet for humans, generic agents, Codex, or Claude Code
 - generate agent-facing scaffolding for Codex and Claude Code
 - open a single-page terminal UI for browsing, editing, previewing, and copying structured packets
+- document a repeatable read, narrow, implement, and sync workflow for code agents
 
 ## Why
 
@@ -120,6 +121,40 @@ If you also pass `--codex-skill-dir ~/.codex/skills/cotext-context`, the same sk
 - `.claude/commands/cotext-sync.md`
 
 This follows Claude Code's project-local customization model so a repository can ship its own context workflow.
+
+## Agent Workflow
+
+`cotext` is designed to be read at the start of a substantial agent task and synced at the end if durable project context changed.
+
+A good default loop is:
+
+1. Load the packet with `cotext render --audience codex` or `cotext render --audience claude`.
+2. Narrow the view with `cotext list --category ...`, `cotext render --category ...`, or `cotext show <id>` when the task is scoped.
+3. Do the implementation or analysis.
+4. Write back durable design, note, progress, todo, or deferred changes with `cotext update`, `cotext new`, or `cotext tui`.
+
+Useful patterns:
+
+- `cotext list --category todo --status active --status planned`
+  Surface the actionable queue.
+- `cotext render --category progress --category todo --audience codex`
+  Load a focused packet when resuming active work.
+- `cotext update <id> --append "Validation: cargo test"`
+  Add short evidence to an existing progress entry.
+- `cotext update <id> --status done`
+  Close a completed todo.
+- `cotext new note "Important environment caveat" --section env/setup --tag ops`
+  Capture a new durable warning or operating fact.
+
+Category guide:
+
+- `design`: architecture, invariants, tradeoffs, durable decisions
+- `note`: warnings, caveats, environment facts, operator reminders
+- `progress`: landed work, evidence, next step
+- `todo`: the next concrete task
+- `deferred`: intentionally postponed future work
+
+For the detailed workflow, maintenance notes, and regeneration steps for the checked-in agent guidance, see [docs/agent-workflow.md](docs/agent-workflow.md).
 
 ## TUI
 
