@@ -30,6 +30,18 @@ impl fmt::Display for Audience {
     }
 }
 
+impl Audience {
+    pub const CYCLE: [Self; 4] = [Self::Human, Self::Agent, Self::Codex, Self::Claude];
+
+    pub fn next(self) -> Self {
+        let index = Self::CYCLE
+            .iter()
+            .position(|candidate| *candidate == self)
+            .unwrap_or(0);
+        Self::CYCLE[(index + 1) % Self::CYCLE.len()]
+    }
+}
+
 #[derive(
     Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, ValueEnum,
 )]

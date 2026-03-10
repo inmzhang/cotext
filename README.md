@@ -15,7 +15,7 @@ The tool is built for both humans and code agents. It can:
 - create and update structured context entries
 - render a concatenated packet for humans, generic agents, Codex, or Claude Code
 - generate agent-facing scaffolding for Codex and Claude Code
-- open a single-page terminal UI for browsing, editing, and copying structured packets to the clipboard
+- open a single-page terminal UI for browsing, editing, previewing, and copying structured packets
 
 ## Why
 
@@ -127,8 +127,10 @@ This follows Claude Code's project-local customization model so a repository can
 
 - category cards across the top
 - a filtered entry list on the left
-- detail and editor panes on the right
-- clipboard export for the selected entry or the whole current category
+- detail and preview/editor panes on the right
+- staged quick-create prompts for title, section, and tags before the first file write
+- packet preview modes for the current entry, current category, open category work, and open project work
+- clipboard export for the selected entry or the whole current category using the current preview audience
 
 Key bindings:
 
@@ -137,6 +139,11 @@ Key bindings:
 - `n`: create a new entry in the current category
 - `e`: edit the selected body
 - `t`: edit the selected title
+- `s`: edit the selected section
+- `g`: edit the selected tags
+- `p`: cycle preview mode
+- `a`: cycle preview audience
+- `PageUp` / `PageDown`: scroll the preview pane
 - `Ctrl-s`: save changes
 - `Esc`: cancel editing
 - `S`: cycle status
@@ -150,7 +157,9 @@ The first implementation is intentionally simple:
 
 - entries are markdown files with YAML front matter
 - section filtering is prefix-based
-- the TUI edits one selected item at a time
-- clipboard export is text-based, aimed at quick paste into an agent session
+- the TUI edits one selected item at a time, but now covers body, title, section, and tags
+- new entries collect metadata before the initial file write so ids and paths start correct
+- packet preview can switch between entry, category, and open-work views without leaving the TUI
+- clipboard export is text-based and audience-aware, aimed at quick paste into an agent session
 
 That is enough to consolidate design notes, awareness notes, progress, next work, and deferred work without introducing a database or web app.

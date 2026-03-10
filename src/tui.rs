@@ -1,7 +1,10 @@
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
 use arboard::Clipboard;
+use chrono::Utc;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -15,9 +18,12 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Pa
 use ratatui::{Frame, Terminal};
 use tui_textarea::TextArea;
 
-use crate::model::{Audience, Category, Entry, EntryFilter, EntryStatus, EntryUpdate, NewEntry};
-use crate::render::{render_clipboard_packet, render_single_entry};
-use crate::storage::Project;
+use crate::model::{
+    Audience, Category, Entry, EntryFilter, EntryFrontMatter, EntryStatus, EntryUpdate, NewEntry,
+    normalize_section,
+};
+use crate::render::{render_clipboard_packet, render_packet, render_single_entry};
+use crate::storage::{Project, slugify};
 
 pub fn run(project: Project) -> Result<()> {
     enable_raw_mode()?;
@@ -37,6 +43,75 @@ enum Mode {
     Browse,
     EditBody,
     EditTitle,
+    EditSection,
+    EditTags,
+    CreateTitle,
+    CreateSection,
+    CreateTags,
+}
+
+impl Mode {
+    fn is_create(self) -> bool {
+        matches!(
+            self,
+            Self::CreateTitle | Self::CreateSection | Self::CreateTags
+        )
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Browse => "browse",
+            Self::EditBody => "body",
+            Self::EditTitle => "title",
+            Self::EditSection => "section",
+            Self::EditTags => "tags",
+            Self::CreateTitle => "new title",
+            Self::CreateSection => "new section",
+            Self::CreateTags => "new tags",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreviewMode {
+    Entry,
+    CategoryPacket,
+    CategoryOpenPacket,
+    ProjectOpenPacket,
+}
+
+impl PreviewMode {
+    const ALL: [Self; 4] = [
+        Self::Entry,
+        Self::CategoryPacket,
+        Self::CategoryOpenPacket,
+        Self::ProjectOpenPacket,
+    ];
+
+    fn next(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Entry => "entry preview",
+            Self::CategoryPacket => "category packet",
+            Self::CategoryOpenPacket => "open category packet",
+            Self::ProjectOpenPacket => "open project packet",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CreateDraft {
+    category: Category,
+    title: String,
+    section: Option<String>,
+    tags: BTreeSet<String>,
 }
 
 struct App {
@@ -46,8 +121,12 @@ struct App {
     selected: usize,
     mode: Mode,
     body_editor: TextArea<'static>,
-    title_editor: TextArea<'static>,
+    field_editor: TextArea<'static>,
     status: String,
+    preview_mode: PreviewMode,
+    preview_audience: Audience,
+    preview_scroll: u16,
+    create_draft: Option<CreateDraft>,
 }
 
 impl App {
@@ -59,10 +138,12 @@ impl App {
             selected: 0,
             mode: Mode::Browse,
             body_editor: TextArea::default(),
-            title_editor: TextArea::default(),
-            status:
-                "Tab: category  j/k: move  e: edit  t: title  n: new  S: status  c/C: copy  q: quit"
-                    .to_string(),
+            field_editor: TextArea::default(),
+            status: default_status_message().to_string(),
+            preview_mode: PreviewMode::Entry,
+            preview_audience: Audience::Agent,
+            preview_scroll: 0,
+            create_draft: None,
         };
         app.refresh(None)?;
         Ok(app)
@@ -86,6 +167,7 @@ impl App {
         } else {
             self.selected.min(visible.len().saturating_sub(1))
         };
+        self.preview_scroll = 0;
         Ok(())
     }
 
@@ -95,6 +177,30 @@ impl App {
             .enumerate()
             .filter(|(_, entry)| entry.category() == self.current_category())
             .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn current_category_entries(&self) -> Vec<Entry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.category() == self.current_category())
+            .cloned()
+            .collect()
+    }
+
+    fn open_category_entries(&self) -> Vec<Entry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.category() == self.current_category() && is_open_entry(entry))
+            .cloned()
+            .collect()
+    }
+
+    fn open_project_entries(&self) -> Vec<Entry> {
+        self.entries
+            .iter()
+            .filter(|entry| is_open_entry(entry))
+            .cloned()
             .collect()
     }
 
@@ -109,9 +215,29 @@ impl App {
         self.selected_entry().map(|entry| entry.id().to_string())
     }
 
+    fn set_field_editor(&mut self, block_title: impl Into<String>, initial_value: String) {
+        let block_title = block_title.into();
+        self.field_editor = TextArea::from(vec![initial_value]);
+        self.field_editor.set_block(
+            Block::default()
+                .title(block_title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        );
+    }
+
+    fn field_text_inline(&self) -> String {
+        self.field_editor.lines().join(" ").trim().to_string()
+    }
+
+    fn field_text_multiline(&self) -> String {
+        self.field_editor.lines().join("\n")
+    }
+
     fn next_category(&mut self) {
         self.category_index = (self.category_index + 1) % Category::ALL.len();
         self.selected = 0;
+        self.preview_scroll = 0;
     }
 
     fn previous_category(&mut self) {
@@ -121,6 +247,7 @@ impl App {
             self.category_index -= 1;
         }
         self.selected = 0;
+        self.preview_scroll = 0;
     }
 
     fn move_down(&mut self) {
@@ -130,10 +257,12 @@ impl App {
         } else {
             self.selected = (self.selected + 1).min(len - 1);
         }
+        self.preview_scroll = 0;
     }
 
     fn move_up(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+        self.preview_scroll = 0;
     }
 
     fn start_body_edit(&mut self) {
@@ -155,52 +284,99 @@ impl App {
 
     fn start_title_edit(&mut self) {
         if let Some(title) = self.selected_entry().map(|entry| entry.title().to_string()) {
-            self.title_editor = TextArea::from([title.clone()]);
-            self.title_editor.set_block(
-                Block::default()
-                    .title("Title Editor (Ctrl-S to save, Esc to cancel)")
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded),
+            self.set_field_editor(
+                "Title Editor (Ctrl-S to save, Esc to cancel)",
+                title.clone(),
             );
             self.mode = Mode::EditTitle;
             self.status = format!("Editing title for `{title}`");
         }
     }
 
-    fn create_entry(&mut self) -> Result<()> {
+    fn start_section_edit(&mut self) {
+        let Some(entry) = self.selected_entry().cloned() else {
+            return;
+        };
+        self.set_field_editor(
+            "Section Editor (Ctrl-S to save, Esc to cancel)",
+            entry.section().unwrap_or_default().to_string(),
+        );
+        self.mode = Mode::EditSection;
+        self.status = format!("Editing section for `{}`", entry.title());
+    }
+
+    fn start_tags_edit(&mut self) {
+        let Some(entry) = self.selected_entry().cloned() else {
+            return;
+        };
+        self.set_field_editor(
+            "Tags Editor (comma or newline separated)",
+            tags_editor_value(&entry.front_matter.tags),
+        );
+        self.mode = Mode::EditTags;
+        self.status = format!("Editing tags for `{}`", entry.title());
+    }
+
+    fn start_create(&mut self) {
         let category = self.current_category();
-        let title = format!("Untitled {}", category.dir_name());
-        let created = self.project.create_entry(NewEntry {
+        self.create_draft = Some(CreateDraft {
             category,
-            title: title.clone(),
+            title: String::new(),
             section: None,
-            status: None,
-            tags: Default::default(),
-            body: Some(category.placeholder_body(&title)),
-        })?;
-        let preserve_id = Some(created.id().to_string());
-        self.refresh(preserve_id)?;
-        self.start_body_edit();
-        Ok(())
+            tags: BTreeSet::new(),
+        });
+        self.set_field_editor(
+            "New Entry Title (Ctrl-S to continue, Esc to cancel)",
+            String::new(),
+        );
+        self.mode = Mode::CreateTitle;
+        self.status = format!("New {} entry: set the title", category.dir_name());
     }
 
     fn cycle_status(&mut self) -> Result<()> {
-        if let Some(id) = self.selected_entry_id() {
-            let next_status = self
-                .selected_entry()
-                .map(|entry| entry.status().next())
-                .unwrap_or(EntryStatus::Active);
-            self.project.update_entry(
-                &id,
-                EntryUpdate {
-                    status: Some(next_status),
-                    ..EntryUpdate::default()
-                },
-            )?;
-            self.refresh(Some(id))?;
-            self.status = format!("Status set to `{next_status}`");
-        }
+        let Some(entry) = self.selected_entry().cloned() else {
+            return Ok(());
+        };
+        let id = entry.id().to_string();
+        let next_status = entry.status().next();
+        self.project.update_entry(
+            &id,
+            EntryUpdate {
+                status: Some(next_status),
+                ..EntryUpdate::default()
+            },
+        )?;
+        self.refresh(Some(id))?;
+        self.status = format!("Status set to `{next_status}`");
         Ok(())
+    }
+
+    fn cycle_preview_mode(&mut self) {
+        self.preview_mode = self.preview_mode.next();
+        self.preview_scroll = 0;
+        self.status = format!(
+            "Preview mode: {} [{}]",
+            self.preview_mode.label(),
+            self.preview_audience
+        );
+    }
+
+    fn cycle_preview_audience(&mut self) {
+        self.preview_audience = self.preview_audience.next();
+        self.preview_scroll = 0;
+        self.status = format!(
+            "Preview audience: {} ({})",
+            self.preview_audience,
+            self.preview_mode.label()
+        );
+    }
+
+    fn scroll_preview_down(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_add(4);
+    }
+
+    fn scroll_preview_up(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_sub(4);
     }
 
     fn copy_selected(&mut self) {
@@ -208,10 +384,14 @@ impl App {
             match copy_to_clipboard(&render_clipboard_packet(
                 &self.project,
                 &[entry.clone()],
-                Audience::Agent,
+                self.preview_audience,
             )) {
                 Ok(()) => {
-                    self.status = format!("Copied `{}` packet to clipboard", entry.id());
+                    self.status = format!(
+                        "Copied `{}` packet to clipboard [{}]",
+                        entry.id(),
+                        self.preview_audience
+                    );
                 }
                 Err(error) => {
                     self.status = format!("Clipboard error: {error}");
@@ -229,13 +409,14 @@ impl App {
         match copy_to_clipboard(&render_clipboard_packet(
             &self.project,
             &visible,
-            Audience::Agent,
+            self.preview_audience,
         )) {
             Ok(()) => {
                 self.status = format!(
-                    "Copied {} packet for {}",
+                    "Copied {} packet for {} [{}]",
                     self.current_category().dir_name(),
-                    self.project.config.name
+                    self.project.config.name,
+                    self.preview_audience
                 );
             }
             Err(error) => {
@@ -245,13 +426,19 @@ impl App {
     }
 
     fn save_editor(&mut self) -> Result<()> {
-        let Some(id) = self.selected_entry_id() else {
-            return Ok(());
-        };
         match self.mode {
             Mode::Browse => {}
             Mode::EditBody => {
+                let Some(entry) = self.selected_entry().cloned() else {
+                    return Ok(());
+                };
                 let body = self.body_editor.lines().join("\n");
+                if body == entry.body {
+                    self.mode = Mode::Browse;
+                    self.status = "Body unchanged".to_string();
+                    return Ok(());
+                }
+                let id = entry.id().to_string();
                 self.project.update_entry(
                     &id,
                     EntryUpdate {
@@ -264,29 +451,260 @@ impl App {
                 self.status = format!("Saved body for `{id}`");
             }
             Mode::EditTitle => {
-                let title = self.title_editor.lines().join(" ").trim().to_string();
+                let Some(entry) = self.selected_entry().cloned() else {
+                    return Ok(());
+                };
+                let title = self.field_text_inline();
                 if title.is_empty() {
                     self.status = "Title cannot be empty".to_string();
-                } else {
-                    self.project.update_entry(
-                        &id,
-                        EntryUpdate {
-                            title: Some(title),
-                            ..EntryUpdate::default()
-                        },
-                    )?;
-                    self.mode = Mode::Browse;
-                    self.refresh(Some(id.clone()))?;
-                    self.status = format!("Saved title for `{id}`");
+                    return Ok(());
                 }
+                if title == entry.title() {
+                    self.mode = Mode::Browse;
+                    self.status = "Title unchanged".to_string();
+                    return Ok(());
+                }
+                let id = entry.id().to_string();
+                self.project.update_entry(
+                    &id,
+                    EntryUpdate {
+                        title: Some(title),
+                        ..EntryUpdate::default()
+                    },
+                )?;
+                self.mode = Mode::Browse;
+                self.refresh(Some(id.clone()))?;
+                self.status = format!("Saved title for `{id}`");
+            }
+            Mode::EditSection => {
+                let Some(entry) = self.selected_entry().cloned() else {
+                    return Ok(());
+                };
+                let raw_section = self.field_text_inline();
+                let next_section = normalize_section(&raw_section);
+                let current_section = entry.section().map(str::to_string);
+                if next_section == current_section {
+                    self.mode = Mode::Browse;
+                    self.status = "Section unchanged".to_string();
+                    return Ok(());
+                }
+                let id = entry.id().to_string();
+                self.project.update_entry(
+                    &id,
+                    EntryUpdate {
+                        section: Some(raw_section),
+                        ..EntryUpdate::default()
+                    },
+                )?;
+                self.mode = Mode::Browse;
+                self.refresh(Some(id.clone()))?;
+                self.status = match next_section {
+                    Some(section) => format!("Saved section `{section}` for `{id}`"),
+                    None => format!("Cleared section for `{id}`"),
+                };
+            }
+            Mode::EditTags => {
+                let Some(entry) = self.selected_entry().cloned() else {
+                    return Ok(());
+                };
+                let next_tags = parse_tags_input(&self.field_text_multiline());
+                if next_tags == entry.front_matter.tags {
+                    self.mode = Mode::Browse;
+                    self.status = "Tags unchanged".to_string();
+                    return Ok(());
+                }
+                let current_tags = entry.front_matter.tags.clone();
+                let add_tags = next_tags
+                    .difference(&current_tags)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let remove_tags = current_tags
+                    .difference(&next_tags)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let id = entry.id().to_string();
+                self.project.update_entry(
+                    &id,
+                    EntryUpdate {
+                        add_tags,
+                        remove_tags,
+                        ..EntryUpdate::default()
+                    },
+                )?;
+                self.mode = Mode::Browse;
+                self.refresh(Some(id.clone()))?;
+                self.status = format!("Saved tags for `{id}`");
+            }
+            Mode::CreateTitle => {
+                let title = self.field_text_inline();
+                if title.is_empty() {
+                    self.status = "Title cannot be empty".to_string();
+                    return Ok(());
+                }
+                if let Some(draft) = self.create_draft.as_mut() {
+                    draft.title = title;
+                }
+                let section = self
+                    .create_draft
+                    .as_ref()
+                    .and_then(|draft| draft.section.clone())
+                    .unwrap_or_default();
+                self.set_field_editor("New Entry Section (optional, Ctrl-S to continue)", section);
+                self.mode = Mode::CreateSection;
+                self.status = format!(
+                    "New {} entry: set the section (optional)",
+                    self.current_category().dir_name()
+                );
+            }
+            Mode::CreateSection => {
+                let section = normalize_section(&self.field_text_inline());
+                if let Some(draft) = self.create_draft.as_mut() {
+                    draft.section = section;
+                }
+                let existing_tags = self
+                    .create_draft
+                    .as_ref()
+                    .map(|draft| tags_editor_value(&draft.tags))
+                    .unwrap_or_default();
+                self.set_field_editor("New Entry Tags (comma or newline separated)", existing_tags);
+                self.mode = Mode::CreateTags;
+                self.status = format!(
+                    "New {} entry: set tags (optional)",
+                    self.current_category().dir_name()
+                );
+            }
+            Mode::CreateTags => {
+                let tags = parse_tags_input(&self.field_text_multiline());
+                let Some(mut draft) = self.create_draft.take() else {
+                    self.mode = Mode::Browse;
+                    return Ok(());
+                };
+                draft.tags = tags;
+                let created = self.project.create_entry(NewEntry {
+                    category: draft.category,
+                    title: draft.title.clone(),
+                    section: draft.section.clone(),
+                    status: None,
+                    tags: draft.tags,
+                    body: Some(draft.category.placeholder_body(&draft.title)),
+                })?;
+                let preserve_id = Some(created.id().to_string());
+                self.mode = Mode::Browse;
+                self.refresh(preserve_id)?;
+                self.start_body_edit();
             }
         }
         Ok(())
     }
 
     fn cancel_edit(&mut self) {
+        if self.mode.is_create() {
+            self.create_draft = None;
+            self.mode = Mode::Browse;
+            self.status = "New entry cancelled".to_string();
+            return;
+        }
         self.mode = Mode::Browse;
         self.status = "Edit cancelled".to_string();
+    }
+
+    fn preview_entries(&self) -> Vec<Entry> {
+        match self.preview_mode {
+            PreviewMode::Entry => self.selected_entry().cloned().into_iter().collect(),
+            PreviewMode::CategoryPacket => self.current_category_entries(),
+            PreviewMode::CategoryOpenPacket => self.open_category_entries(),
+            PreviewMode::ProjectOpenPacket => self.open_project_entries(),
+        }
+    }
+
+    fn browse_preview_title(&self) -> String {
+        match self.preview_mode {
+            PreviewMode::Entry => " Entry Preview ".to_string(),
+            PreviewMode::CategoryPacket => format!(
+                " {} Packet [{}] ",
+                self.current_category().dir_name(),
+                self.preview_audience
+            ),
+            PreviewMode::CategoryOpenPacket => format!(
+                " open {} Packet [{}] ",
+                self.current_category().dir_name(),
+                self.preview_audience
+            ),
+            PreviewMode::ProjectOpenPacket => {
+                format!(" open Project Packet [{}] ", self.preview_audience)
+            }
+        }
+    }
+
+    fn browse_preview_contents(&self) -> String {
+        match self.preview_mode {
+            PreviewMode::Entry => self
+                .selected_entry()
+                .map(render_single_entry)
+                .unwrap_or_else(|| "No entry selected.".to_string()),
+            PreviewMode::CategoryPacket
+            | PreviewMode::CategoryOpenPacket
+            | PreviewMode::ProjectOpenPacket => render_packet(
+                &self.project,
+                &self.preview_entries(),
+                self.preview_audience,
+            ),
+        }
+    }
+
+    fn field_preview_entry(&self, entry: &Entry) -> Entry {
+        let mut preview = entry.clone();
+        match self.mode {
+            Mode::EditTitle => {
+                preview.front_matter.title = self.field_text_inline();
+            }
+            Mode::EditSection => {
+                preview.front_matter.section = normalize_section(&self.field_text_inline());
+            }
+            Mode::EditTags => {
+                preview.front_matter.tags = parse_tags_input(&self.field_text_multiline());
+            }
+            _ => {}
+        }
+        preview
+    }
+
+    fn create_preview_entry(&self) -> Option<Entry> {
+        let draft = self.create_draft.as_ref()?;
+        let title = match self.mode {
+            Mode::CreateTitle => {
+                let live_title = self.field_text_inline();
+                if live_title.is_empty() {
+                    "Untitled entry".to_string()
+                } else {
+                    live_title
+                }
+            }
+            _ => draft.title.clone(),
+        };
+        let section = match self.mode {
+            Mode::CreateSection => normalize_section(&self.field_text_inline()),
+            _ => draft.section.clone(),
+        };
+        let tags = match self.mode {
+            Mode::CreateTags => parse_tags_input(&self.field_text_multiline()),
+            _ => draft.tags.clone(),
+        };
+        let now = Utc::now();
+        Some(Entry {
+            front_matter: EntryFrontMatter {
+                id: slugify(&title),
+                title: title.clone(),
+                category: draft.category,
+                section,
+                status: draft.category.default_status(),
+                tags,
+                created_at: now,
+                updated_at: now,
+            },
+            body: draft.category.placeholder_body(&title),
+            path: PathBuf::new(),
+        })
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -307,10 +725,16 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => self.move_up(),
                 KeyCode::Char('e') => self.start_body_edit(),
                 KeyCode::Char('t') => self.start_title_edit(),
-                KeyCode::Char('n') => self.create_entry()?,
+                KeyCode::Char('s') => self.start_section_edit(),
+                KeyCode::Char('g') => self.start_tags_edit(),
+                KeyCode::Char('n') => self.start_create(),
                 KeyCode::Char('S') => self.cycle_status()?,
+                KeyCode::Char('p') => self.cycle_preview_mode(),
+                KeyCode::Char('a') => self.cycle_preview_audience(),
                 KeyCode::Char('c') => self.copy_selected(),
                 KeyCode::Char('C') => self.copy_category(),
+                KeyCode::PageDown => self.scroll_preview_down(),
+                KeyCode::PageUp => self.scroll_preview_up(),
                 KeyCode::Char('r') => self.refresh(self.selected_entry_id())?,
                 _ => {}
             },
@@ -321,11 +745,16 @@ impl App {
                     self.body_editor.input(key);
                 }
             }
-            Mode::EditTitle => {
+            Mode::EditTitle
+            | Mode::EditSection
+            | Mode::EditTags
+            | Mode::CreateTitle
+            | Mode::CreateSection
+            | Mode::CreateTags => {
                 if key.code == KeyCode::Esc {
                     self.cancel_edit();
                 } else {
-                    self.title_editor.input(key);
+                    self.field_editor.input(key);
                 }
             }
         }
@@ -487,55 +916,92 @@ fn draw_entry_list(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 }
 
 fn draw_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+    if app.mode.is_create() {
+        draw_create_detail(frame, area, app);
+        return;
+    }
+
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(8)])
+        .constraints([Constraint::Length(8), Constraint::Min(8)])
         .split(area);
+    draw_selected_meta(frame, rows[0], app, app.selected_entry());
 
-    let Some(entry) = app.selected_entry().cloned() else {
-        let empty = Paragraph::new("No entries in this category yet. Press `n` to create one.")
-            .block(
-                Block::default()
-                    .title(" Empty ")
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded),
-            )
-            .wrap(Wrap { trim: true });
-        frame.render_widget(empty, area);
-        return;
-    };
+    match app.mode {
+        Mode::Browse => draw_browse_preview(frame, rows[1], app),
+        Mode::EditBody => frame.render_widget(&app.body_editor, rows[1]),
+        Mode::EditTitle | Mode::EditSection | Mode::EditTags => {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(5), Constraint::Min(3)])
+                .split(rows[1]);
+            frame.render_widget(&app.field_editor, split[0]);
+            let preview = app
+                .selected_entry()
+                .map(|entry| render_single_entry(&app.field_preview_entry(entry)))
+                .unwrap_or_else(|| "No entry selected.".to_string());
+            let preview_widget = Paragraph::new(preview)
+                .block(
+                    Block::default()
+                        .title(" Preview ")
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded),
+                )
+                .wrap(Wrap { trim: false });
+            frame.render_widget(preview_widget, split[1]);
+        }
+        Mode::CreateTitle | Mode::CreateSection | Mode::CreateTags => {}
+    }
+}
 
-    let tags = if entry.front_matter.tags.is_empty() {
-        "none".to_string()
-    } else {
-        entry
-            .front_matter
-            .tags
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+fn draw_selected_meta(frame: &mut Frame<'_>, area: Rect, app: &App, selected: Option<&Entry>) {
+    let tags = selected
+        .map(|entry| format_tags(&entry.front_matter.tags))
+        .unwrap_or_else(|| "none".to_string());
+    let title = selected
+        .map(|entry| entry.title().to_string())
+        .unwrap_or_else(|| format!("No {} entries yet", app.current_category().dir_name()));
+    let status_badge = selected
+        .map(|entry| entry.status().to_string())
+        .unwrap_or_else(|| "empty".to_string());
+    let id = selected
+        .map(|entry| entry.id().to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let section = selected
+        .and_then(Entry::section)
+        .unwrap_or("(root)")
+        .to_string();
+    let updated = selected
+        .map(|entry| {
+            entry
+                .front_matter
+                .updated_at
+                .format("%Y-%m-%d %H:%M UTC")
+                .to_string()
+        })
+        .unwrap_or_else(|| "-".to_string());
     let meta = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
-                entry.title().to_string(),
+                title,
                 Style::default()
                     .fg(Color::Rgb(248, 250, 252))
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
             Span::styled(
-                format!("[{}]", entry.status()),
+                format!("[{status_badge}]"),
                 Style::default().fg(Color::Rgb(94, 234, 212)),
             ),
         ]),
-        Line::from(format!("id: {}", entry.id())),
-        Line::from(format!("section: {}", entry.section().unwrap_or("(root)"))),
+        Line::from(format!("id: {id}")),
+        Line::from(format!("section: {section}")),
         Line::from(format!("tags: {tags}")),
+        Line::from(format!("updated: {updated}")),
         Line::from(format!(
-            "updated: {}",
-            entry.front_matter.updated_at.format("%Y-%m-%d %H:%M UTC")
+            "preview: {} [{}]",
+            app.preview_mode.label(),
+            app.preview_audience
         )),
     ])
     .block(
@@ -545,41 +1011,102 @@ fn draw_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             .border_type(BorderType::Rounded),
     )
     .wrap(Wrap { trim: true });
+    frame.render_widget(meta, area);
+}
+
+fn draw_browse_preview(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    if app.preview_mode == PreviewMode::Entry && app.selected_entry().is_none() {
+        draw_empty_detail(frame, area);
+        return;
+    }
+
+    let preview = Paragraph::new(app.browse_preview_contents())
+        .block(
+            Block::default()
+                .title(app.browse_preview_title())
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        )
+        .scroll((app.preview_scroll, 0))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(preview, area);
+}
+
+fn draw_create_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(8)])
+        .split(area);
+
+    let Some(preview_entry) = app.create_preview_entry() else {
+        draw_empty_detail(frame, area);
+        return;
+    };
+
+    let meta = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(
+                format!(
+                    "New {} entry",
+                    preview_entry.front_matter.category.dir_name()
+                ),
+                Style::default()
+                    .fg(Color::Rgb(248, 250, 252))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("[{}]", preview_entry.status()),
+                Style::default().fg(Color::Rgb(94, 234, 212)),
+            ),
+        ]),
+        Line::from(format!("id preview: {}", preview_entry.id())),
+        Line::from(format!(
+            "section: {}",
+            preview_entry.section().unwrap_or("(root)")
+        )),
+        Line::from(format!(
+            "tags: {}",
+            format_tags(&preview_entry.front_matter.tags)
+        )),
+        Line::from(format!("prompt: {}", app.mode.label())),
+        Line::from("flow: title -> section -> tags -> body"),
+    ])
+    .block(
+        Block::default()
+            .title(" New Entry ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded),
+    )
+    .wrap(Wrap { trim: true });
     frame.render_widget(meta, rows[0]);
 
-    match app.mode {
-        Mode::Browse => {
-            let body = Paragraph::new(render_single_entry(&entry))
-                .block(
-                    Block::default()
-                        .title(" Body ")
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded),
-                )
-                .wrap(Wrap { trim: false });
-            frame.render_widget(body, rows[1]);
-        }
-        Mode::EditBody => {
-            frame.render_widget(&app.body_editor, rows[1]);
-        }
-        Mode::EditTitle => {
-            let split = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(5), Constraint::Min(3)])
-                .split(rows[1]);
-            frame.render_widget(&app.title_editor, split[0]);
-            let help =
-                Paragraph::new("Edit the title above. The body preview stays visible below.")
-                    .block(
-                        Block::default()
-                            .title(" Body Preview ")
-                            .borders(Borders::ALL)
-                            .border_type(BorderType::Rounded),
-                    )
-                    .wrap(Wrap { trim: true });
-            frame.render_widget(help, split[1]);
-        }
-    }
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Min(3)])
+        .split(rows[1]);
+    frame.render_widget(&app.field_editor, split[0]);
+    let preview = Paragraph::new(render_single_entry(&preview_entry))
+        .block(
+            Block::default()
+                .title(" Preview ")
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(preview, split[1]);
+}
+
+fn draw_empty_detail(frame: &mut Frame<'_>, area: Rect) {
+    let empty = Paragraph::new("No entries in this category yet. Press `n` to create one.")
+        .block(
+            Block::default()
+                .title(" Empty ")
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(empty, area);
 }
 
 fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -601,8 +1128,169 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(footer, area);
 }
 
+fn default_status_message() -> &'static str {
+    "Tab: category  j/k: move  e/t/s/g: edit  n: new  p/a: preview  PgUp/PgDn: scroll  S: status  c/C: copy  q: quit"
+}
+
+fn is_open_entry(entry: &Entry) -> bool {
+    !matches!(entry.status(), EntryStatus::Done | EntryStatus::Archived)
+}
+
+fn format_tags(tags: &BTreeSet<String>) -> String {
+    if tags.is_empty() {
+        "none".to_string()
+    } else {
+        tags.iter().cloned().collect::<Vec<_>>().join(", ")
+    }
+}
+
+fn tags_editor_value(tags: &BTreeSet<String>) -> String {
+    tags.iter().cloned().collect::<Vec<_>>().join(", ")
+}
+
+fn parse_tags_input(input: &str) -> BTreeSet<String> {
+    input
+        .split(|ch| ch == ',' || ch == '\n')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn copy_to_clipboard(contents: &str) -> Result<()> {
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(contents.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn seeded_project() -> Result<Project> {
+        let temp = TempDir::new()?;
+        let root = temp.path().to_path_buf();
+        std::mem::forget(temp);
+        Project::init(&root, Some("demo".to_string()), false)
+    }
+
+    fn replace_field(app: &mut App, value: &str) {
+        app.field_editor = TextArea::from(vec![value.to_string()]);
+    }
+
+    #[test]
+    fn section_edit_updates_entry_section() -> Result<()> {
+        let project = seeded_project()?;
+        project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Ship metadata editor".to_string(),
+            section: Some("tui".to_string()),
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::new(),
+            body: Some("Body".to_string()),
+        })?;
+
+        let mut app = App::new(project)?;
+        app.category_index = 3;
+        app.start_section_edit();
+        replace_field(&mut app, "tui/roadmap");
+        app.save_editor()?;
+
+        assert_eq!(
+            app.selected_entry().and_then(Entry::section),
+            Some("tui/roadmap")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tags_edit_replaces_full_tag_set() -> Result<()> {
+        let project = seeded_project()?;
+        project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Ship metadata editor".to_string(),
+            section: Some("tui".to_string()),
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::from(["old".to_string(), "keep".to_string()]),
+            body: Some("Body".to_string()),
+        })?;
+
+        let mut app = App::new(project)?;
+        app.category_index = 3;
+        app.start_tags_edit();
+        replace_field(&mut app, "keep, new-tag");
+        app.save_editor()?;
+
+        assert_eq!(
+            app.selected_entry()
+                .map(|entry| entry.front_matter.tags.clone()),
+            Some(BTreeSet::from(["keep".to_string(), "new-tag".to_string()]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn quick_create_collects_metadata_before_creating_entry() -> Result<()> {
+        let project = seeded_project()?;
+        let mut app = App::new(project)?;
+        app.category_index = 3;
+
+        app.start_create();
+        replace_field(&mut app, "Roadmap item");
+        app.save_editor()?;
+        assert_eq!(app.mode, Mode::CreateSection);
+
+        replace_field(&mut app, "tui/roadmap");
+        app.save_editor()?;
+        assert_eq!(app.mode, Mode::CreateTags);
+
+        replace_field(&mut app, "tui, ux");
+        app.save_editor()?;
+
+        let entry = app.selected_entry().cloned().expect("new entry selected");
+        assert_eq!(app.mode, Mode::EditBody);
+        assert_eq!(entry.id(), "roadmap-item");
+        assert_eq!(entry.title(), "Roadmap item");
+        assert_eq!(entry.section(), Some("tui/roadmap"));
+        assert_eq!(
+            entry.front_matter.tags,
+            BTreeSet::from(["tui".to_string(), "ux".to_string()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn open_category_preview_filters_done_entries() -> Result<()> {
+        let project = seeded_project()?;
+        project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Keep me open".to_string(),
+            section: None,
+            status: Some(EntryStatus::Planned),
+            tags: BTreeSet::new(),
+            body: Some("Body".to_string()),
+        })?;
+        project.create_entry(NewEntry {
+            category: Category::Todo,
+            title: "Hide me done".to_string(),
+            section: None,
+            status: Some(EntryStatus::Done),
+            tags: BTreeSet::new(),
+            body: Some("Body".to_string()),
+        })?;
+
+        let mut app = App::new(project)?;
+        app.category_index = 3;
+        app.preview_mode = PreviewMode::CategoryOpenPacket;
+
+        let preview_titles = app
+            .preview_entries()
+            .into_iter()
+            .map(|entry| entry.title().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(preview_titles, vec!["Keep me open".to_string()]);
+        Ok(())
+    }
 }
