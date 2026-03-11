@@ -98,6 +98,7 @@ Use `cotext` as the write path when durable context changes.
 
 - Update an existing entry when you are advancing or closing already tracked work.
 - Create a new entry when the work introduced a new durable decision, warning, next step, or deferred item.
+- If you appended or refreshed the managed cotext block in a target repository's `AGENTS.md` or `CLAUDE.md`, treat that guidance edit as durable project state and sync cotext before handoff.
 - Prefer `cotext update`, `cotext new`, or `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing broken metadata or debugging `cotext` itself.
 - Before final handoff, make sure the packet reflects the real state of the code.
 
@@ -186,5 +187,7 @@ When changing agent guidance in this repository:
    ```
 
 4. Sync any durable project-state changes back through `cotext`.
+
+   That includes agent-guidance edits: if you appended or refreshed the managed cotext block in the target repo's `AGENTS.md` or `CLAUDE.md`, update the relevant cotext entry before finishing.
 
 This keeps the source templates, the checked-in generated guidance, and the project packet aligned.

@@ -14,6 +14,7 @@ Use `cotext` as the canonical project context manager for `cotext`.
 ### Sync Rules
 
 - Write back meaningful design, progress, note, todo, or deferred changes through `cotext new`, `cotext update`, or `cotext tui`.
+- If you append or refresh the managed cotext block in the target project's `AGENTS.md` or `CLAUDE.md`, treat that as durable guidance work and sync the relevant cotext entry before handoff.
 - Prefer `cotext` commands over hand-editing `.cotext/entries/` unless you are repairing broken metadata or debugging cotext itself.
 - Use `cotext update <id> --append ...` for incremental progress and `cotext update <id> --status done` when closing tracked work.
 - If the work introduced a new durable decision or follow-up item, create a new entry instead of overloading an unrelated one.

@@ -27,6 +27,7 @@ description: Read and update structured project context for cotext with cotext. 
 - Use `cotext update <id> --append ...` for incremental progress or validation evidence.
 - Use `cotext update <id> --status done` when closing work.
 - Use `cotext new <category> <title> ...` for newly discovered durable context.
+- If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
 - Prefer `cotext` commands over direct edits to `.cotext/entries/` unless you are repairing the tool or broken metadata.
 
 ## Command cookbook

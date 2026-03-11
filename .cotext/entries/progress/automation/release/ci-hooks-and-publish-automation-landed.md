@@ -9,7 +9,7 @@ tags:
 - docs
 - release
 created_at: 2026-03-10T08:45:51.931466714Z
-updated_at: 2026-03-10T14:27:15.044661566Z
+updated_at: 2026-03-11T02:55:01.017778135Z
 ---
 Completed
 - Added GitHub Actions CI for `cargo fmt --all -- --check`, `cargo check --all-targets --all-features`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test`.
@@ -41,3 +41,17 @@ Release
 
 Docs
 - Removed the README development section so the public README stays focused on install, commands, agent integration, and TUI usage.
+
+Release prep
+- Bumped the crate version to `0.1.2` for the agent-guidance sync reminder update and prepared the next release tag from `master`.
+
+Validation
+- Pending: `cargo fmt --all -- --check`, `cargo test`, and `cargo publish --dry-run --allow-dirty` before commit/tag push.
+
+Next step
+- Commit the `0.1.2` release prep, push `master`, and push tag `v0.1.2`.
+
+Validation
+- `cargo fmt --all -- --check` passes for the `0.1.2` release prep.
+- `cargo test` passes for the `0.1.2` release prep.
+- `cargo publish --dry-run --allow-dirty` passes for the `0.1.2` release prep.

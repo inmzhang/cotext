@@ -225,6 +225,7 @@ Use `cotext` as the canonical project context manager for `{project_name}`.
 ### Sync Rules
 
 - Write back meaningful design, progress, note, todo, or deferred changes through `cotext new`, `cotext update`, or `cotext tui`.
+- If you append or refresh the managed cotext block in the target project's `AGENTS.md` or `CLAUDE.md`, treat that as durable guidance work and sync the relevant cotext entry before handoff.
 - Prefer `cotext` commands over hand-editing `.cotext/entries/` unless you are repairing broken metadata or debugging cotext itself.
 - Use `cotext update <id> --append ...` for incremental progress and `cotext update <id> --status done` when closing tracked work.
 - If the work introduced a new durable decision or follow-up item, create a new entry instead of overloading an unrelated one.
@@ -263,6 +264,7 @@ Use `cotext` as the canonical project context manager for `{project_name}`.
 
 - Use `.claude/commands/cotext.md` to load the authoritative packet inside Claude Code.
 - Use `.claude/commands/cotext-sync.md` after meaningful work to sync design, progress, note, todo, or deferred changes.
+- If you append or refresh the managed cotext block in the target project's `AGENTS.md` or `CLAUDE.md`, record that guidance change in cotext before handoff.
 - Prefer `cotext update` and `cotext new` over manual edits to `.cotext/entries/` unless the tool itself is the thing being repaired.
 
 ### Generated Assets
@@ -316,6 +318,7 @@ Use `cotext` as the canonical context layer for `{project_name}`. The normal loo
 - Use `cotext update <id> --append ...` for short progress/evidence additions.
 - Use `cotext update <id> --status done` when a tracked task is complete.
 - Use `cotext new <category> <title> ...` when the work introduced a new durable decision, warning, next step, or deferred item.
+- If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
 - Prefer `cotext update` / `cotext new` / `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing broken metadata or debugging cotext.
 
 ## Category guide
@@ -409,6 +412,7 @@ description: Read and update structured project context for {project_name} with 
 - Use `cotext update <id> --append ...` for incremental progress or validation evidence.
 - Use `cotext update <id> --status done` when closing work.
 - Use `cotext new <category> <title> ...` for newly discovered durable context.
+- If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
 - Prefer `cotext` commands over direct edits to `.cotext/entries/` unless you are repairing the tool or broken metadata.
 
 ## Command cookbook
@@ -463,8 +467,9 @@ Sync context with this checklist:
 2. Use `cotext update <id> --append ...` for short evidence or validation notes.
 3. Use `cotext update <id> --status done` when a todo is complete.
 4. Create a new entry with `cotext new <category> <title> ...` when the work introduced a new durable design decision, warning, next step, or deferred item.
-5. Prefer `cotext` commands or `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing cotext itself.
-6. Re-render the relevant packet or list after syncing so the final state is confirmed before handoff.
+5. If you appended or refreshed the managed cotext block in the target repo's `AGENTS.md` or `CLAUDE.md`, record that guidance change in cotext before handoff.
+6. Prefer `cotext` commands or `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing cotext itself.
+7. Re-render the relevant packet or list after syncing so the final state is confirmed before handoff.
 "#
     )
 }
@@ -498,6 +503,7 @@ mod tests {
         assert!(block.contains("cotext render --audience codex"));
         assert!(block.contains("cotext agent install codex --overwrite"));
         assert!(block.contains(".codex/skills/cotext-context/"));
+        assert!(block.contains("`AGENTS.md` or `CLAUDE.md`"));
     }
 
     #[test]
@@ -515,7 +521,9 @@ mod tests {
         let load = claude_context_command(&demo_project());
         let sync = claude_sync_command(&demo_project());
         assert!(skill.contains("cotext render --audience claude"));
+        assert!(skill.contains("`AGENTS.md`, `CLAUDE.md`, or other generated agent guidance"));
         assert!(load.contains("cotext list --category todo"));
+        assert!(sync.contains("`AGENTS.md` or `CLAUDE.md`"));
         assert!(sync.contains("Re-render the relevant packet or list after syncing"));
     }
 }

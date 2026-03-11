@@ -38,6 +38,7 @@ Use `cotext` as the canonical context layer for `cotext`. The normal loop is:
 - Use `cotext update <id> --append ...` for short progress/evidence additions.
 - Use `cotext update <id> --status done` when a tracked task is complete.
 - Use `cotext new <category> <title> ...` when the work introduced a new durable decision, warning, next step, or deferred item.
+- If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
 - Prefer `cotext update` / `cotext new` / `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing broken metadata or debugging cotext.
 
 ## Category guide
