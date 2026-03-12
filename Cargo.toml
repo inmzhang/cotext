@@ -1,6 +1,6 @@
 [package]
 name = "cotext"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Structured project context for humans and coding agents, with a CLI and ratatui TUI."
 readme = "README.md"
