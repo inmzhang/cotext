@@ -11,5 +11,5 @@ Sync context with this checklist:
 3. Use `cotext update <id> --status done` when a todo is complete.
 4. Create a new entry with `cotext new <category> <title> ...` when the work introduced a new durable design decision, warning, next step, or deferred item.
 5. If you appended or refreshed the managed cotext block in the target repo's `AGENTS.md` or `CLAUDE.md`, record that guidance change in cotext before handoff.
-6. Prefer `cotext` commands or `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing cotext itself.
+6. Prefer `cotext` commands or `cotext tui` over direct edits to the managed cotext entry markdown on disk unless you are repairing cotext itself.
 7. Re-render the relevant packet or list after syncing so the final state is confirmed before handoff.

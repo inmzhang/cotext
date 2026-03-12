@@ -219,6 +219,7 @@ Use `cotext` as the canonical project context manager for `{project_name}`.
 ### Startup
 
 - Read the current packet with `cotext render --audience codex` before substantial work.
+- Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` to force repo-local management.
 - If the task is about "next", "continue", or resuming active work, also inspect `cotext list --category todo` and `cotext list --category deferred`.
 - If the task is scoped, narrow with `cotext list --category <category>`, `cotext render --category <category> --audience codex`, or `cotext show <id>`.
 
@@ -226,7 +227,7 @@ Use `cotext` as the canonical project context manager for `{project_name}`.
 
 - Write back meaningful design, progress, note, todo, or deferred changes through `cotext new`, `cotext update`, or `cotext tui`.
 - If you append or refresh the managed cotext block in the target project's `AGENTS.md` or `CLAUDE.md`, treat that as durable guidance work and sync the relevant cotext entry before handoff.
-- Prefer `cotext` commands over hand-editing `.cotext/entries/` unless you are repairing broken metadata or debugging cotext itself.
+- Prefer `cotext` commands over hand-editing the managed cotext entry markdown on disk unless you are repairing broken metadata or debugging cotext itself.
 - Use `cotext update <id> --append ...` for incremental progress and `cotext update <id> --status done` when closing tracked work.
 - If the work introduced a new durable decision or follow-up item, create a new entry instead of overloading an unrelated one.
 
@@ -257,6 +258,7 @@ Use `cotext` as the canonical project context manager for `{project_name}`.
 ### Startup
 
 - Refresh context with `cotext render --audience claude` before coding.
+- Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` to force repo-local management.
 - If the task is about resuming work, next work, or deferred work, inspect `cotext list --category todo` and `cotext list --category deferred`.
 - Narrow the read with `cotext render --category <category> --audience claude` or `cotext show <id>` when only one slice matters.
 
@@ -265,7 +267,7 @@ Use `cotext` as the canonical project context manager for `{project_name}`.
 - Use `.claude/commands/cotext.md` to load the authoritative packet inside Claude Code.
 - Use `.claude/commands/cotext-sync.md` after meaningful work to sync design, progress, note, todo, or deferred changes.
 - If you append or refresh the managed cotext block in the target project's `AGENTS.md` or `CLAUDE.md`, record that guidance change in cotext before handoff.
-- Prefer `cotext update` and `cotext new` over manual edits to `.cotext/entries/` unless the tool itself is the thing being repaired.
+- Prefer `cotext update` and `cotext new` over manual edits to the managed cotext entry markdown on disk unless the tool itself is the thing being repaired.
 
 ### Generated Assets
 
@@ -297,11 +299,12 @@ Use `cotext` as the canonical context layer for `{project_name}`. The normal loo
 ## Default operating sequence
 
 1. Start with `cotext render --audience codex`.
-2. If the task is about resuming work, "continue", or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
-3. If the task is about one slice of context, narrow with `cotext list --category <category>`, `cotext render --category <category> --audience codex`, or `cotext show <id>`.
-4. Do the work.
-5. If durable context changed, update the relevant entry with `cotext update` or create a new one with `cotext new`.
-6. When a human wants one-screen review/editing, use `cotext tui`.
+2. Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` to force repo-local management.
+3. If the task is about resuming work, "continue", or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
+4. If the task is about one slice of context, narrow with `cotext list --category <category>`, `cotext render --category <category> --audience codex`, or `cotext show <id>`.
+5. Do the work.
+6. If durable context changed, update the relevant entry with `cotext update` or create a new one with `cotext new`.
+7. When a human wants one-screen review/editing, use `cotext tui`.
 
 ## Read patterns
 
@@ -319,7 +322,7 @@ Use `cotext` as the canonical context layer for `{project_name}`. The normal loo
 - Use `cotext update <id> --status done` when a tracked task is complete.
 - Use `cotext new <category> <title> ...` when the work introduced a new durable decision, warning, next step, or deferred item.
 - If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
-- Prefer `cotext update` / `cotext new` / `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing broken metadata or debugging cotext.
+- Prefer `cotext update` / `cotext new` / `cotext tui` over direct edits to the managed cotext entry markdown on disk unless you are repairing broken metadata or debugging cotext.
 
 ## Category guide
 
@@ -393,11 +396,12 @@ description: Read and update structured project context for {project_name} with 
 ## Default operating sequence
 
 1. Run `cotext render --audience claude` to load the current project packet.
-2. If the task is about continuing work or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
-3. If the task is scoped, narrow the context with `cotext render --category <category> --audience claude`, `cotext list --category <category>`, or `cotext show <id>`.
-4. Perform the implementation or analysis.
-5. After meaningful work, sync durable changes with `cotext update` or `cotext new`.
-6. Use `cotext tui` when a human wants to review and edit context on a single page.
+2. Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` to force repo-local management.
+3. If the task is about continuing work or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
+4. If the task is scoped, narrow the context with `cotext render --category <category> --audience claude`, `cotext list --category <category>`, or `cotext show <id>`.
+5. Perform the implementation or analysis.
+6. After meaningful work, sync durable changes with `cotext update` or `cotext new`.
+7. Use `cotext tui` when a human wants to review and edit context on a single page.
 
 ## What belongs in each category
 
@@ -413,7 +417,7 @@ description: Read and update structured project context for {project_name} with 
 - Use `cotext update <id> --status done` when closing work.
 - Use `cotext new <category> <title> ...` for newly discovered durable context.
 - If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
-- Prefer `cotext` commands over direct edits to `.cotext/entries/` unless you are repairing the tool or broken metadata.
+- Prefer `cotext` commands over direct edits to the managed cotext entry markdown on disk unless you are repairing the tool or broken metadata.
 
 ## Command cookbook
 
@@ -445,9 +449,10 @@ Run `cotext render --audience claude` from the project root and treat the result
 
 Then:
 
-1. If the user is asking what to do next or to continue ongoing work, also run `cotext list --category todo` and `cotext list --category deferred`.
-2. If only one slice matters, narrow with `cotext render --category <category> --audience claude`, `cotext list --category <category>`, or `cotext show <id>`.
-3. Summarize the active items you are going to follow before you proceed with implementation.
+1. Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` when you need the repo-local store explicitly.
+2. If the user is asking what to do next or to continue ongoing work, also run `cotext list --category todo` and `cotext list --category deferred`.
+3. If only one slice matters, narrow with `cotext render --category <category> --audience claude`, `cotext list --category <category>`, or `cotext show <id>`.
+4. Summarize the active items you are going to follow before you proceed with implementation.
 "#
     )
 }
@@ -468,7 +473,7 @@ Sync context with this checklist:
 3. Use `cotext update <id> --status done` when a todo is complete.
 4. Create a new entry with `cotext new <category> <title> ...` when the work introduced a new durable design decision, warning, next step, or deferred item.
 5. If you appended or refreshed the managed cotext block in the target repo's `AGENTS.md` or `CLAUDE.md`, record that guidance change in cotext before handoff.
-6. Prefer `cotext` commands or `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing cotext itself.
+6. Prefer `cotext` commands or `cotext tui` over direct edits to the managed cotext entry markdown on disk unless you are repairing cotext itself.
 7. Re-render the relevant packet or list after syncing so the final state is confirmed before handoff.
 "#
     )
@@ -481,7 +486,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::model::ProjectConfig;
+    use crate::model::{ProjectConfig, StorageScope, current_schema_version};
 
     fn demo_project() -> Project {
         let root = PathBuf::from("/tmp/cotext-demo");
@@ -489,9 +494,11 @@ mod tests {
             data_dir: root.join(".cotext"),
             root,
             config: ProjectConfig {
-                schema_version: 1,
+                schema_version: current_schema_version(),
                 name: "demo".to_string(),
                 created_at: Utc::now(),
+                storage: StorageScope::Local,
+                project_root: None,
             },
         }
     }

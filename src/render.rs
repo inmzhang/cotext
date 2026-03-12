@@ -27,6 +27,12 @@ pub fn render_packet(project: &Project, entries: &[Entry], audience: Audience) -
     let _ = writeln!(&mut out);
     let _ = writeln!(&mut out, "- Project: {}", project.config.name);
     let _ = writeln!(&mut out, "- Root: `{}`", project.root.display());
+    let _ = writeln!(
+        &mut out,
+        "- Storage: {} (`{}`)",
+        project.storage_scope(),
+        project.data_dir_display()
+    );
     let _ = writeln!(&mut out, "- Generated: {generated_at}");
     let _ = writeln!(
         &mut out,

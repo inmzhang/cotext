@@ -8,11 +8,12 @@ description: Read and update structured project context for cotext with cotext. 
 ## Default operating sequence
 
 1. Run `cotext render --audience claude` to load the current project packet.
-2. If the task is about continuing work or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
-3. If the task is scoped, narrow the context with `cotext render --category <category> --audience claude`, `cotext list --category <category>`, or `cotext show <id>`.
-4. Perform the implementation or analysis.
-5. After meaningful work, sync durable changes with `cotext update` or `cotext new`.
-6. Use `cotext tui` when a human wants to review and edit context on a single page.
+2. Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` to force repo-local management.
+3. If the task is about continuing work or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
+4. If the task is scoped, narrow the context with `cotext render --category <category> --audience claude`, `cotext list --category <category>`, or `cotext show <id>`.
+5. Perform the implementation or analysis.
+6. After meaningful work, sync durable changes with `cotext update` or `cotext new`.
+7. Use `cotext tui` when a human wants to review and edit context on a single page.
 
 ## What belongs in each category
 
@@ -28,7 +29,7 @@ description: Read and update structured project context for cotext with cotext. 
 - Use `cotext update <id> --status done` when closing work.
 - Use `cotext new <category> <title> ...` for newly discovered durable context.
 - If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
-- Prefer `cotext` commands over direct edits to `.cotext/entries/` unless you are repairing the tool or broken metadata.
+- Prefer `cotext` commands over direct edits to the managed cotext entry markdown on disk unless you are repairing the tool or broken metadata.
 
 ## Command cookbook
 

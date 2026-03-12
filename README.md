@@ -35,7 +35,29 @@ cotext render --audience codex
 cotext tui
 ```
 
-Each project gets a plain-text `.cotext/` directory:
+## Storage Modes
+
+`cotext` can keep entry files in one of two places:
+
+- `global` (default): store the project under the system-local data directory. On Linux this is `~/.local/share/<project-name>/`.
+- `local`: keep the project inside the repository under `.cotext/`.
+
+All commands accept `--storage local|global`. By default, commands prefer global storage and fall back to repo-local storage when no matching global project exists.
+
+Default global layout:
+
+```text
+~/.local/share/<project-name>/
+  cotext.toml
+  entries/
+    design/
+    note/
+    progress/
+    todo/
+    deferred/
+```
+
+Opt-in local layout:
 
 ```text
 .cotext/
@@ -51,19 +73,20 @@ Each project gets a plain-text `.cotext/` directory:
 ## Core Commands
 
 ```text
-cotext init [path]
-cotext new <category> <title>
-cotext update <id>
-cotext list
-cotext show <id>
-cotext render [--audience human|agent|codex|claude]
-cotext agent install <codex|claude|all>
-cotext tui
+cotext init [--storage local|global] [path]
+cotext new <category> <title> [--storage local|global]
+cotext update <id> [--storage local|global]
+cotext list [--storage local|global]
+cotext show <id> [--storage local|global]
+cotext render [--storage local|global] [--audience human|agent|codex|claude]
+cotext agent install <codex|claude|all> [--storage local|global]
+cotext tui [--storage local|global]
 ```
 
 High-signal patterns:
 
 - `cotext render --audience codex`
+- `cotext render --storage local --audience codex`
 - `cotext render --category progress --category todo --audience codex`
 - `cotext list --category todo --status active --status planned`
 - `cotext update <id> --append "Validation: cargo test"`

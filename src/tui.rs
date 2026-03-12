@@ -1413,7 +1413,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, app: &App) {
 
     let tip = Paragraph::new(vec![
         Line::from(Span::styled(
-            "Add flow: title -> section -> tags -> editor. Delete removes the markdown file from .cotext/entries and prunes empty section directories.",
+            "Add flow: title -> section -> tags -> editor. Delete removes the markdown file from the active cotext entries directory and prunes empty section directories.",
             Style::default().fg(TEXT_PRIMARY),
         )),
         Line::from(Span::styled(
@@ -1727,12 +1727,13 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::model::StorageScope;
 
     fn seeded_project() -> Result<Project> {
         let temp = TempDir::new()?;
         let root = temp.path().to_path_buf();
         std::mem::forget(temp);
-        Project::init(&root, Some("demo".to_string()), false)
+        Project::init(&root, Some("demo".to_string()), false, StorageScope::Local)
     }
 
     fn replace_field(app: &mut App, value: &str) {

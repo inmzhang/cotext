@@ -8,10 +8,10 @@ use walkdir::WalkDir;
 
 use crate::model::{
     Category, Entry, EntryFilter, EntryFrontMatter, EntryStatus, EntryUpdate, NewEntry,
-    ProjectConfig, normalize_section,
+    ProjectConfig, StorageScope, current_schema_version, normalize_section,
 };
 
-const DATA_DIR: &str = ".cotext";
+const LOCAL_DATA_DIR: &str = ".cotext";
 const CONFIG_FILE: &str = "cotext.toml";
 const ENTRY_DIR: &str = "entries";
 
@@ -23,14 +23,59 @@ pub struct Project {
 }
 
 impl Project {
-    pub fn init(root: &Path, name: Option<String>, force: bool) -> Result<Self> {
+    pub fn init(
+        root: &Path,
+        name: Option<String>,
+        force: bool,
+        storage: StorageScope,
+    ) -> Result<Self> {
+        Self::init_with_data_root(root, name, force, storage, None)
+    }
+
+    fn init_with_data_root(
+        root: &Path,
+        name: Option<String>,
+        force: bool,
+        storage: StorageScope,
+        global_data_root: Option<&Path>,
+    ) -> Result<Self> {
         let root = root
             .canonicalize()
             .or_else(|_| Ok::<PathBuf, std::io::Error>(root.to_path_buf()))?;
-        let data_dir = root.join(DATA_DIR);
+        let project_name = name.unwrap_or_else(|| default_project_name(&root));
+        let data_dir = match storage {
+            StorageScope::Local => root.join(LOCAL_DATA_DIR),
+            StorageScope::Global => {
+                let global_data_root = match global_data_root {
+                    Some(path) => path.to_path_buf(),
+                    None => system_data_root()?,
+                };
+                global_project_data_dir(&global_data_root, &project_name)
+            }
+        };
         let config_path = data_dir.join(CONFIG_FILE);
-        if config_path.exists() && !force {
-            bail!("cotext project already exists at {}", config_path.display());
+        if config_path.exists() {
+            let existing = load_config(&config_path)?;
+            if storage == StorageScope::Global
+                && existing
+                    .project_root
+                    .as_ref()
+                    .is_some_and(|existing_root| existing_root != &root)
+            {
+                bail!(
+                    "global cotext project `{}` already exists at {} for {}",
+                    existing.name,
+                    config_path.display(),
+                    existing
+                        .project_root
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "<unknown root>".to_string())
+                );
+            }
+            if !force {
+                bail!("cotext project already exists at {}", config_path.display());
+            }
         }
 
         fs::create_dir_all(data_dir.join(ENTRY_DIR))
@@ -42,52 +87,57 @@ impl Project {
         }
 
         let config = ProjectConfig {
-            schema_version: 1,
-            name: name.unwrap_or_else(|| {
-                root.file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("cotext-project")
-                    .to_string()
-            }),
+            schema_version: current_schema_version(),
+            name: project_name,
             created_at: Utc::now(),
+            storage,
+            project_root: match storage {
+                StorageScope::Local => None,
+                StorageScope::Global => Some(root.clone()),
+            },
         };
         let config_contents = toml::to_string_pretty(&config)?;
         fs::write(&config_path, config_contents)
             .with_context(|| format!("failed to write {}", config_path.display()))?;
-        Self::discover(&root)
+        Ok(Self {
+            root,
+            data_dir,
+            config,
+        })
     }
 
-    pub fn discover(start: &Path) -> Result<Self> {
-        let start = if start.is_file() {
-            start
-                .parent()
-                .context("cannot discover cotext project from a file without a parent")?
-        } else {
-            start
-        };
-
-        for candidate in start.ancestors() {
-            let data_dir = candidate.join(DATA_DIR);
-            let config_path = data_dir.join(CONFIG_FILE);
-            if config_path.exists() {
-                let raw = fs::read_to_string(&config_path)
-                    .with_context(|| format!("failed to read {}", config_path.display()))?;
-                let config: ProjectConfig = toml::from_str(&raw).with_context(|| {
-                    format!("invalid project config at {}", config_path.display())
-                })?;
-                return Ok(Self {
-                    root: candidate.to_path_buf(),
-                    data_dir,
-                    config,
-                });
-            }
+    pub fn discover(start: &Path, preferred_storage: StorageScope) -> Result<Self> {
+        let start = discovery_start(start)?;
+        match preferred_storage {
+            StorageScope::Local => Self::discover_local(&start),
+            StorageScope::Global => match Self::discover_global(&start, None) {
+                Ok(project) => Ok(project),
+                Err(global_error) => match Self::discover_local(&start) {
+                    Ok(project) => Ok(project),
+                    Err(local_error) => bail!(
+                        "no cotext project found starting from {} (global lookup failed: {}; repo-local lookup failed: {})",
+                        start.display(),
+                        global_error,
+                        local_error
+                    ),
+                },
+            },
         }
-
-        bail!("no cotext project found starting from {}", start.display());
     }
 
     pub fn entry_dir(&self, category: Category) -> PathBuf {
         self.data_dir.join(ENTRY_DIR).join(category.dir_name())
+    }
+
+    pub fn storage_scope(&self) -> StorageScope {
+        self.config.storage
+    }
+
+    pub fn data_dir_display(&self) -> String {
+        self.data_dir
+            .strip_prefix(&self.root)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| self.data_dir.display().to_string())
     }
 
     pub fn list_entries(&self, filter: &EntryFilter) -> Result<Vec<Entry>> {
@@ -266,6 +316,170 @@ impl Project {
             .with_context(|| format!("failed to read {}", path.display()))?;
         parse_entry(&raw, path)
     }
+
+    fn discover_local(start: &Path) -> Result<Self> {
+        for candidate in start.ancestors() {
+            let data_dir = candidate.join(LOCAL_DATA_DIR);
+            let config_path = data_dir.join(CONFIG_FILE);
+            if config_path.exists() {
+                return load_project(&config_path, data_dir, candidate.to_path_buf());
+            }
+        }
+
+        bail!(
+            "no repo-local cotext project found from {}",
+            start.display()
+        );
+    }
+
+    fn discover_global(start: &Path, global_data_root: Option<&Path>) -> Result<Self> {
+        for candidate in start.ancestors() {
+            let config_path = candidate.join(CONFIG_FILE);
+            if config_path.exists() {
+                let project = load_project(
+                    &config_path,
+                    candidate.to_path_buf(),
+                    candidate.to_path_buf(),
+                )?;
+                if project.storage_scope() == StorageScope::Global {
+                    return Ok(project);
+                }
+            }
+        }
+
+        let global_data_root = match global_data_root {
+            Some(path) => path.to_path_buf(),
+            None => system_data_root()?,
+        };
+        if !global_data_root.exists() {
+            bail!(
+                "global cotext data root {} does not exist",
+                global_data_root.display()
+            );
+        }
+
+        let ancestors = start.ancestors().map(Path::to_path_buf).collect::<Vec<_>>();
+        let mut best_match: Option<(usize, Project)> = None;
+
+        for result in fs::read_dir(&global_data_root)
+            .with_context(|| format!("failed to inspect {}", global_data_root.display()))?
+        {
+            let entry = result?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+
+            let data_dir = entry.path();
+            let config_path = data_dir.join(CONFIG_FILE);
+            if !config_path.exists() {
+                continue;
+            }
+
+            let project = load_project(&config_path, data_dir.clone(), data_dir)?;
+            if project.storage_scope() != StorageScope::Global {
+                continue;
+            }
+
+            let Some(rank) = ancestors
+                .iter()
+                .position(|candidate| *candidate == project.root)
+            else {
+                continue;
+            };
+
+            if let Some((best_rank, best_project)) = &best_match {
+                if rank < *best_rank {
+                    best_match = Some((rank, project));
+                    continue;
+                }
+                if rank == *best_rank && best_project.data_dir != project.data_dir {
+                    bail!(
+                        "multiple global cotext projects matched {}: {} and {}",
+                        project.root.display(),
+                        best_project.data_dir.display(),
+                        project.data_dir.display()
+                    );
+                }
+                continue;
+            }
+
+            best_match = Some((rank, project));
+        }
+
+        best_match
+            .map(|(_, project)| project)
+            .context("no global cotext project matched the requested path")
+    }
+}
+
+fn discovery_start(start: &Path) -> Result<PathBuf> {
+    let start = if start.is_file() {
+        start
+            .parent()
+            .context("cannot discover cotext project from a file without a parent")?
+    } else {
+        start
+    };
+    Ok(start
+        .canonicalize()
+        .or_else(|_| Ok::<PathBuf, std::io::Error>(start.to_path_buf()))?)
+}
+
+fn default_project_name(root: &Path) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cotext-project")
+        .to_string()
+}
+
+fn system_data_root() -> Result<PathBuf> {
+    dirs::data_local_dir().context("failed to resolve the system-local data directory")
+}
+
+fn global_project_data_dir(global_data_root: &Path, project_name: &str) -> PathBuf {
+    global_data_root.join(global_project_dir_name(project_name))
+}
+
+fn global_project_dir_name(project_name: &str) -> String {
+    let sanitized = project_name
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' => '-',
+            _ if ch.is_control() => '-',
+            _ => ch,
+        })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string();
+    if sanitized.is_empty() {
+        "cotext-project".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn load_config(config_path: &Path) -> Result<ProjectConfig> {
+    let raw = fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    toml::from_str(&raw)
+        .with_context(|| format!("invalid project config at {}", config_path.display()))
+}
+
+fn load_project(config_path: &Path, data_dir: PathBuf, fallback_root: PathBuf) -> Result<Project> {
+    let config = load_config(config_path)?;
+    let root = match config.storage {
+        StorageScope::Local => fallback_root,
+        StorageScope::Global => config
+            .project_root
+            .clone()
+            .context("global cotext config is missing `project_root`")?,
+    };
+    Ok(Project {
+        root,
+        data_dir,
+        config,
+    })
 }
 
 fn matches_filter(entry: &Entry, filter: &EntryFilter) -> bool {
@@ -396,12 +610,17 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::model::{Category, EntryStatus, NewEntry};
+    use crate::model::{Category, EntryStatus, NewEntry, StorageScope};
 
     #[test]
     fn init_create_update_roundtrip() -> Result<()> {
         let temp = TempDir::new()?;
-        let project = Project::init(temp.path(), Some("demo".to_string()), false)?;
+        let project = Project::init(
+            temp.path(),
+            Some("demo".to_string()),
+            false,
+            StorageScope::Local,
+        )?;
         let entry = project.create_entry(NewEntry {
             category: Category::Todo,
             title: "Add agent sync".to_string(),
@@ -441,7 +660,12 @@ mod tests {
     #[test]
     fn delete_entry_removes_file_and_empty_section_dirs() -> Result<()> {
         let temp = TempDir::new()?;
-        let project = Project::init(temp.path(), Some("demo".to_string()), false)?;
+        let project = Project::init(
+            temp.path(),
+            Some("demo".to_string()),
+            false,
+            StorageScope::Local,
+        )?;
         let entry = project.create_entry(NewEntry {
             category: Category::Todo,
             title: "Delete me".to_string(),
@@ -465,7 +689,12 @@ mod tests {
     #[test]
     fn reconcile_edited_entry_updates_timestamp_and_body() -> Result<()> {
         let temp = TempDir::new()?;
-        let project = Project::init(temp.path(), Some("demo".to_string()), false)?;
+        let project = Project::init(
+            temp.path(),
+            Some("demo".to_string()),
+            false,
+            StorageScope::Local,
+        )?;
         let entry = project.create_entry(NewEntry {
             category: Category::Todo,
             title: "Edit me outside".to_string(),
@@ -484,6 +713,58 @@ mod tests {
 
         assert_eq!(reconciled.body, "Edited body");
         assert!(reconciled.front_matter.updated_at > original_updated_at);
+        Ok(())
+    }
+
+    #[test]
+    fn global_init_stores_entries_under_system_data_root() -> Result<()> {
+        let repo = TempDir::new()?;
+        let data_root = TempDir::new()?;
+        fs::create_dir_all(repo.path().join("src"))?;
+
+        let project = Project::init_with_data_root(
+            repo.path(),
+            Some("demo-project".to_string()),
+            false,
+            StorageScope::Global,
+            Some(data_root.path()),
+        )?;
+
+        assert_eq!(project.storage_scope(), StorageScope::Global);
+        assert_eq!(project.root, repo.path().canonicalize()?);
+        assert_eq!(project.data_dir, data_root.path().join("demo-project"));
+        assert!(project.data_dir.join(CONFIG_FILE).exists());
+        assert!(project.entry_dir(Category::Todo).exists());
+
+        let discovered =
+            Project::discover_global(&repo.path().join("src"), Some(data_root.path()))?;
+        assert_eq!(discovered.root, project.root);
+        assert_eq!(discovered.data_dir, project.data_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn global_discovery_prefers_global_storage_when_local_and_global_exist() -> Result<()> {
+        let repo = TempDir::new()?;
+        let data_root = TempDir::new()?;
+
+        let local = Project::init(
+            repo.path(),
+            Some("demo-project".to_string()),
+            false,
+            StorageScope::Local,
+        )?;
+        let global = Project::init_with_data_root(
+            repo.path(),
+            Some("demo-project".to_string()),
+            false,
+            StorageScope::Global,
+            Some(data_root.path()),
+        )?;
+
+        let discovered = Project::discover_global(repo.path(), Some(data_root.path()))?;
+        assert_eq!(discovered.data_dir, global.data_dir);
+        assert_ne!(discovered.data_dir, local.data_dir);
         Ok(())
     }
 }

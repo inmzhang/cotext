@@ -42,6 +42,31 @@ impl Audience {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageScope {
+    Local,
+    Global,
+}
+
+impl fmt::Display for StorageScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Local => "local",
+            Self::Global => "global",
+        };
+        write!(f, "{label}")
+    }
+}
+
+pub fn default_local_storage_scope() -> StorageScope {
+    StorageScope::Local
+}
+
+pub fn current_schema_version() -> u32 {
+    2
+}
+
 #[derive(
     Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, ValueEnum,
 )]
@@ -176,9 +201,14 @@ impl fmt::Display for EntryStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectConfig {
+    #[serde(default = "current_schema_version")]
     pub schema_version: u32,
     pub name: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default = "default_local_storage_scope")]
+    pub storage: StorageScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

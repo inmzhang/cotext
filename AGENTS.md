@@ -8,6 +8,7 @@ Use `cotext` as the canonical project context manager for `cotext`.
 ### Startup
 
 - Read the current packet with `cotext render --audience codex` before substantial work.
+- Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` to force repo-local management.
 - If the task is about "next", "continue", or resuming active work, also inspect `cotext list --category todo` and `cotext list --category deferred`.
 - If the task is scoped, narrow with `cotext list --category <category>`, `cotext render --category <category> --audience codex`, or `cotext show <id>`.
 
@@ -15,7 +16,7 @@ Use `cotext` as the canonical project context manager for `cotext`.
 
 - Write back meaningful design, progress, note, todo, or deferred changes through `cotext new`, `cotext update`, or `cotext tui`.
 - If you append or refresh the managed cotext block in the target project's `AGENTS.md` or `CLAUDE.md`, treat that as durable guidance work and sync the relevant cotext entry before handoff.
-- Prefer `cotext` commands over hand-editing `.cotext/entries/` unless you are repairing broken metadata or debugging cotext itself.
+- Prefer `cotext` commands over hand-editing the managed cotext entry markdown on disk unless you are repairing broken metadata or debugging cotext itself.
 - Use `cotext update <id> --append ...` for incremental progress and `cotext update <id> --status done` when closing tracked work.
 - If the work introduced a new durable decision or follow-up item, create a new entry instead of overloading an unrelated one.
 

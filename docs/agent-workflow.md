@@ -9,6 +9,15 @@ This document explains how code agents should use `cotext` in practice and how t
 3. Perform the implementation or analysis.
 4. Sync any durable design, note, progress, todo, or deferred changes back into `cotext`.
 
+## Storage Modes
+
+`cotext` can manage a project in two locations:
+
+- `global` storage, which is the default. This keeps the project under the OS-local data directory. On Linux, that is `~/.local/share/<project-name>/`.
+- `local` storage, which keeps the project inside the repository under `.cotext/`.
+
+All commands accept `--storage local|global`. The CLI prefers global storage by default and falls back to repo-local storage when no matching global project exists.
+
 ## Core Commands
 
 Use the live CLI instead of guessing the interface.
@@ -99,7 +108,7 @@ Use `cotext` as the write path when durable context changes.
 - Update an existing entry when you are advancing or closing already tracked work.
 - Create a new entry when the work introduced a new durable decision, warning, next step, or deferred item.
 - If you appended or refreshed the managed cotext block in a target repository's `AGENTS.md` or `CLAUDE.md`, treat that guidance edit as durable project state and sync cotext before handoff.
-- Prefer `cotext update`, `cotext new`, or `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing broken metadata or debugging `cotext` itself.
+- Prefer `cotext update`, `cotext new`, or `cotext tui` over direct edits to the managed cotext entry markdown on disk unless you are repairing broken metadata or debugging `cotext` itself.
 - Before final handoff, make sure the packet reflects the real state of the code.
 
 Useful write patterns:

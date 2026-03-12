@@ -17,11 +17,12 @@ Use `cotext` as the canonical context layer for `cotext`. The normal loop is:
 ## Default operating sequence
 
 1. Start with `cotext render --audience codex`.
-2. If the task is about resuming work, "continue", or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
-3. If the task is about one slice of context, narrow with `cotext list --category <category>`, `cotext render --category <category> --audience codex`, or `cotext show <id>`.
-4. Do the work.
-5. If durable context changed, update the relevant entry with `cotext update` or create a new one with `cotext new`.
-6. When a human wants one-screen review/editing, use `cotext tui`.
+2. Commands prefer global cotext storage by default and fall back to repo-local storage when no matching global project exists; use `--storage local` to force repo-local management.
+3. If the task is about resuming work, "continue", or finding the next item, inspect `cotext list --category todo` and `cotext list --category deferred`.
+4. If the task is about one slice of context, narrow with `cotext list --category <category>`, `cotext render --category <category> --audience codex`, or `cotext show <id>`.
+5. Do the work.
+6. If durable context changed, update the relevant entry with `cotext update` or create a new one with `cotext new`.
+7. When a human wants one-screen review/editing, use `cotext tui`.
 
 ## Read patterns
 
@@ -39,7 +40,7 @@ Use `cotext` as the canonical context layer for `cotext`. The normal loop is:
 - Use `cotext update <id> --status done` when a tracked task is complete.
 - Use `cotext new <category> <title> ...` when the work introduced a new durable decision, warning, next step, or deferred item.
 - If you changed the target repo's `AGENTS.md`, `CLAUDE.md`, or other generated agent guidance, sync cotext before handoff so the packet matches the instructions now on disk.
-- Prefer `cotext update` / `cotext new` / `cotext tui` over direct edits to `.cotext/entries/` unless you are repairing broken metadata or debugging cotext.
+- Prefer `cotext update` / `cotext new` / `cotext tui` over direct edits to the managed cotext entry markdown on disk unless you are repairing broken metadata or debugging cotext.
 
 ## Category guide
 

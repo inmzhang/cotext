@@ -7,7 +7,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::agents::{install_claude, install_codex};
 use crate::model::{
-    Audience, Category, Entry, EntryFilter, EntryStatus, EntryUpdate, NewEntry, normalize_section,
+    Audience, Category, Entry, EntryFilter, EntryStatus, EntryUpdate, NewEntry, StorageScope,
+    normalize_section,
 };
 use crate::render::{render_packet, render_single_entry};
 use crate::storage::Project;
@@ -40,6 +41,8 @@ enum Command {
 struct InitArgs {
     #[arg(default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
     #[arg(long)]
     name: Option<String>,
     #[arg(long)]
@@ -56,6 +59,8 @@ struct NewArgs {
     title: String,
     #[arg(long, default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
     #[arg(long)]
     section: Option<String>,
     #[arg(long)]
@@ -73,6 +78,8 @@ struct UpdateArgs {
     id: String,
     #[arg(long, default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
     #[arg(long)]
     title: Option<String>,
     #[arg(long)]
@@ -99,6 +106,8 @@ struct UpdateArgs {
 struct ListArgs {
     #[arg(long, default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
     #[arg(long = "category")]
     categories: Vec<Category>,
     #[arg(long = "status")]
@@ -123,12 +132,16 @@ struct ShowArgs {
     id: String,
     #[arg(long, default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
 }
 
 #[derive(Debug, Args)]
 struct RenderArgs {
     #[arg(long, default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
     #[arg(long = "category")]
     categories: Vec<Category>,
     #[arg(long = "status")]
@@ -159,6 +172,8 @@ struct InstallArgs {
     target: AgentTarget,
     #[arg(long, default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
     #[arg(long)]
     codex_skill_dir: Option<PathBuf>,
     #[arg(long)]
@@ -176,6 +191,19 @@ enum AgentTarget {
 struct TuiArgs {
     #[arg(default_value = ".")]
     path: PathBuf,
+    #[command(flatten)]
+    storage: StorageArgs,
+}
+
+#[derive(Clone, Debug, Args)]
+struct StorageArgs {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = StorageScope::Global,
+        help = "Use repo-local or global cotext storage"
+    )]
+    storage: StorageScope,
 }
 
 pub fn run() -> Result<()> {
@@ -193,11 +221,13 @@ pub fn run() -> Result<()> {
 }
 
 fn cmd_init(args: InitArgs) -> Result<()> {
-    let project = Project::init(&args.path, args.name, args.force)?;
+    let project = Project::init(&args.path, args.name, args.force, args.storage.storage)?;
     println!(
-        "Initialized cotext project `{}` at {}",
+        "Initialized cotext project `{}` for {} using {} storage at {}",
         project.config.name,
-        project.root.display()
+        project.root.display(),
+        project.storage_scope(),
+        project.data_dir.display()
     );
     if args.with_agents {
         let codex = install_codex(&project, args.codex_skill_dir.as_deref(), true)?;
@@ -211,7 +241,7 @@ fn cmd_init(args: InitArgs) -> Result<()> {
 }
 
 fn cmd_new(args: NewArgs) -> Result<()> {
-    let project = discover(&args.path)?;
+    let project = discover(&args.path, args.storage.storage)?;
     let body = read_body(args.body, args.body_file.as_deref())?;
     let entry = project.create_entry(NewEntry {
         category: args.category,
@@ -234,7 +264,7 @@ fn cmd_new(args: NewArgs) -> Result<()> {
 }
 
 fn cmd_update(args: UpdateArgs) -> Result<()> {
-    let project = discover(&args.path)?;
+    let project = discover(&args.path, args.storage.storage)?;
     let body = read_body(args.body, args.body_file.as_deref())?;
     let entry = project.update_entry(
         &args.id,
@@ -255,7 +285,7 @@ fn cmd_update(args: UpdateArgs) -> Result<()> {
 }
 
 fn cmd_list(args: ListArgs) -> Result<()> {
-    let project = discover(&args.path)?;
+    let project = discover(&args.path, args.storage.storage)?;
     let entries = project.list_entries(&build_filter(
         args.categories,
         args.statuses,
@@ -278,14 +308,14 @@ fn cmd_list(args: ListArgs) -> Result<()> {
 }
 
 fn cmd_show(args: ShowArgs) -> Result<()> {
-    let project = discover(&args.path)?;
+    let project = discover(&args.path, args.storage.storage)?;
     let entry = project.load_entry(&args.id)?;
     print!("{}", render_single_entry(&entry));
     Ok(())
 }
 
 fn cmd_render(args: RenderArgs) -> Result<()> {
-    let project = discover(&args.path)?;
+    let project = discover(&args.path, args.storage.storage)?;
     let entries = project.list_entries(&build_filter(
         args.categories,
         args.statuses,
@@ -305,7 +335,7 @@ fn cmd_render(args: RenderArgs) -> Result<()> {
 fn cmd_agent(args: AgentArgs) -> Result<()> {
     match args.command {
         AgentCommand::Install(args) => {
-            let project = discover(&args.path)?;
+            let project = discover(&args.path, args.storage.storage)?;
             match args.target {
                 AgentTarget::Codex => {
                     let report =
@@ -338,12 +368,12 @@ fn cmd_agent(args: AgentArgs) -> Result<()> {
 }
 
 fn cmd_tui(args: TuiArgs) -> Result<()> {
-    let project = discover(&args.path)?;
+    let project = discover(&args.path, args.storage.storage)?;
     crate::tui::run(project)
 }
 
-fn discover(path: &Path) -> Result<Project> {
-    Project::discover(path)
+fn discover(path: &Path, storage: StorageScope) -> Result<Project> {
+    Project::discover(path, storage)
 }
 
 fn build_filter(
